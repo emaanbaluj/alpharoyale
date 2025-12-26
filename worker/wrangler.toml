@@ -1,0 +1,17 @@
+name = "alpharoyale-worker"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Cron trigger for game ticks (runs every minute)
+# Format: minute hour day month weekday
+# Change to your desired interval, e.g. "*/5 * * * *" for every 5 minutes
+[triggers]
+crons = ["* * * * *"]
+
+[env.production]
+name = "alpharoyale-worker"
+
+[env.development]
+name = "alpharoyale-worker-dev"
+
