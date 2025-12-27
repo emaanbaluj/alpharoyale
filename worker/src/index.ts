@@ -1,3 +1,5 @@
+// worker/src/index.ts
+
 export interface Env {
   FINNHUB_API_KEY?: string;
 }
@@ -31,6 +33,7 @@ export default {
     // - Update market prices
     // - Execute trades
     // - Update game state
+  
     
     console.log(`Game tick executed at ${new Date(event.scheduledTime).toISOString()}`);
   },
