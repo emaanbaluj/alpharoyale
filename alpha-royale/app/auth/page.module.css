@@ -1,0 +1,20 @@
+
+.authwrapper button[type="submit"]{
+    background-color: rgb(37, 99, 235);
+    border: 1px solid rgb(37, 99, 235);
+    border-radius: 5px;
+    padding: 8px 10px;
+}
+.authwrapper button[type="submit"]:hover {
+    background-color: rgb(29, 78, 216);
+    border: 1px solid rgb(29, 78, 216);
+}
+
+.authwrapper input {
+    border: 1px solid rgb(56, 56, 56);
+    border-radius: 5px;
+    padding: 5px 10px;
+}
+.authwrapper input::placeholder {
+    opacity: 0.4;
+}
