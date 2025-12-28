@@ -38,4 +38,3 @@ export default {
     console.log(`Game tick executed at ${new Date(event.scheduledTime).toISOString()}`);
   },
 };
-
