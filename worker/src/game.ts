@@ -13,44 +13,15 @@ const ENV = {
 const supabase = createClient<Database>(ENV.SUPABASE_URL, ENV.SUPABASE_ANON_KEY);
 
 export async function storePriceData() {
-  const symbols = ["AAPL", "GOOGL", "MSFT"];
-
-  // TODO: replace with real tick from incrementGameState()
-  const gameState: number = 0;
-
-  const live = await fetchPriceDataFromFinnhub(symbols, ENV.FINNHUB_API_KEY);
-  // expected: Array<{ symbol: string; price: number; timestamp: string }>
-
-  const rows = live.map((x) => ({
-    symbol: x.symbol,
-    price: x.price,
-    timestamp: x.timestamp,
-    game_state: gameState,
-  }));
-
-  const { data, error } = await supabase
-    .from("price_data")
-    .upsert(rows, { onConflict: "symbol,game_state" })
-    .select();
-
-  if (error) throw error;
-  return data;
+  const symbols = ["AAPL", "GOOGL", "MSFT"]; 
+  const priceData = await fetchPriceDataFromFinnhub(symbols, ENV.FINNHUB_API_KEY);
 }
 
 export async function incrementGameState() {
-  // TODO: implement properly (atomic increment) via RPC or update.
-  throw new Error("incrementGameState() not implemented yet");
+  currentGameState = 
+  
 }
 
 export async function fetchPriceDataFromDB() {
-  // TODO: replace with real tick argument or a stored current tick
-  const gameState: number = 0;
 
-  const { data, error } = await supabase
-    .from("price_data")
-    .select("*")
-    .eq("game_state", gameState);
-
-  if (error) throw error;
-  return data;
 }
