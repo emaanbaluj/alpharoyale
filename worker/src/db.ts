@@ -1,11 +1,28 @@
-// worker/src/db.ts
-import { createClient } from "@supabase/supabase-js";
+
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "./database.types";
 
-const supabase = createClient<Database>(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_ANON_KEY! // NOTE: for worker/server writes you should use SERVICE_ROLE key
-);
+const supabase: SupabaseClient<Database> = null as any; // will be initialized in createSupabaseClient
+
+// DATABSE INTIALIZATION FUNCTIONS
+
+// Function to create and return a Supabase client
+export function createSupabaseClient(params: {
+  supabaseUrl: string;
+  supabaseKey: string;
+}): SupabaseClient<Database> {
+  const { supabaseUrl, supabaseKey } = params;
+
+  if (!supabaseUrl) throw new Error("Missing supabaseUrl");
+  if (!supabaseKey) throw new Error("Missing supabaseKey");
+
+  return createClient<Database>(supabaseUrl, supabaseKey, {
+    auth: { persistSession: false },
+  });
+}
+
+
+// DATABASE QUERY FUNCTIONS
 
 // Function to fetch the current game state
 export async function fetchGameStateFromDB() {
@@ -181,3 +198,175 @@ export async function fetchEquityHistoriesFromDB(filters?: {
   if (error) throw error;
   return data;
 }
+
+// DATABASE UPDATE FUNCTIONS
+
+// Function to update a row in any table (where clause required)
+export async function updateFromDB(
+  table: keyof Database["public"]["Tables"],
+  updates: Record<string, any>,
+  where: Record<string, any>,
+  select: string = "*",
+  single: boolean = true
+) {
+  if (!where || Object.keys(where).length === 0) {
+    throw new Error("updateFromDB: where clause is required");
+  }
+
+  let q = supabase.from(table as string).update(updates);
+
+  for (const [col, val] of Object.entries(where)) {
+    q = q.eq(col, val);
+  }
+
+  const res = single ? await q.select(select).single() : await q.select(select);
+
+  if (res.error) throw res.error;
+  return res.data;
+}
+
+// Function to update the game state row (assumes id = 1)
+export async function updateGameStateFromDB(updates: {
+  current_tick?: number;
+  last_tick_at?: string;
+  updated_at?: string;
+}) {
+  return updateFromDB(
+    "game_state",
+    updates,
+    { id: 1 },
+    "id,current_tick,last_tick_at,updated_at",
+    true
+  );
+}
+
+// Function to update a game (by gameId)
+export async function updateGameFromDB(
+  gameId: string,
+  updates: {
+    status?: string;
+    started_at?: string | null;
+    ended_at?: string | null;
+    winner_id?: string | null;
+    updated_at?: string;
+  }
+) {
+  return updateFromDB("games", updates, { id: gameId }, "*", true);
+}
+
+// Function to update a game player (by gameId + userId)
+export async function updateGamePlayerFromDB(
+  gameId: string,
+  userId: string,
+  updates: {
+    balance?: number;
+    equity?: number;
+    updated_at?: string;
+  }
+) {
+  return updateFromDB("game_players", updates, { game_id: gameId, user_id: userId }, "*", true);
+}
+
+// Function to update a position (by positionId)
+export async function updatePositionFromDB(
+  positionId: string,
+  updates: {
+    current_price?: number | null;
+    unrealized_pnl?: number | null;
+    status?: string;
+    closed_at?: string | null;
+    updated_at?: string;
+  }
+) {
+  return updateFromDB("positions", updates, { id: positionId }, "*", true);
+}
+
+// Function to update positions in a game (by gameId) and return multiple rows
+export async function updatePositionsByGameFromDB(
+  gameId: string,
+  updates: {
+    current_price?: number | null;
+    updated_at?: string;
+  }
+) {
+  return updateFromDB("positions", updates, { game_id: gameId }, "*", false);
+}
+
+// Function to update an order (by orderId)
+export async function updateOrderFromDB(
+  orderId: string,
+  updates: {
+    status?: string;
+    filled_price?: number | null;
+    filled_at?: string | null;
+    price?: number | null;
+    trigger_price?: number | null;
+    position_id?: string | null;
+    updated_at?: string;
+  }
+) {
+  return updateFromDB("orders", updates, { id: orderId }, "*", true);
+}
+
+// Function to mark an order as filled
+export async function markOrderFilledFromDB(orderId: string, filledPrice: number, filledAtIso?: string) {
+  const now = filledAtIso ?? new Date().toISOString();
+  return updateOrderFromDB(orderId, {
+    status: "filled",
+    filled_price: filledPrice,
+    filled_at: now,
+    updated_at: now,
+  });
+}
+
+// Function to mark an order as rejected
+export async function markOrderRejectedFromDB(orderId: string, rejectedAtIso?: string) {
+  const now = rejectedAtIso ?? new Date().toISOString();
+  return updateOrderFromDB(orderId, {
+    status: "rejected",
+    updated_at: now,
+  });
+}
+
+// Function to mark an order as cancelled
+export async function markOrderCancelledFromDB(orderId: string, cancelledAtIso?: string) {
+  const now = cancelledAtIso ?? new Date().toISOString();
+  return updateOrderFromDB(orderId, {
+    status: "cancelled",
+    updated_at: now,
+  });
+}
+
+// Function to update a price_data row (by priceDataId) - usually you upsert instead
+export async function updatePriceDataFromDB(
+  priceDataId: string,
+  updates: {
+    price?: number;
+    timestamp?: string;
+  }
+) {
+  return updateFromDB("price_data", updates, { id: priceDataId }, "*", true);
+}
+
+// Function to update an equity_history row (by equityHistoryId) - usually you upsert instead
+export async function updateEquityHistoryFromDB(
+  equityHistoryId: string,
+  updates: {
+    balance?: number;
+    equity?: number;
+    timestamp?: string;
+  }
+) {
+  return updateFromDB("equity_history", updates, { id: equityHistoryId }, "*", true);
+}
+
+// Function to update an order_executions row (by orderExecutionId) - usually append-only
+export async function updateOrderExecutionFromDB(
+  orderExecutionId: string,
+  updates: {
+    execution_price?: number;
+  }
+) {
+  return updateFromDB("order_executions", updates, { id: orderExecutionId }, "*", true);
+}
+
