@@ -1,0 +1,1 @@
+alter table "public"."price_data" drop constraint "price_data_game_state_fkey";
