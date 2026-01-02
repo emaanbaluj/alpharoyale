@@ -1,9 +1,10 @@
 import Link from "next/link";
+import Image from "next/image";
 
 export default function Home() {
   return (
     <div className="h-screen bg-black text-white flex flex-col items-center justify-center">
-      <h1 className="text-6xl font-bold mb-4">Alpha Royale</h1>
+      <Image src="/alpha_royal_logo.png" alt="Alpha Royale" width={400} height={400} className="mb-8" />
       <p className="text-xl text-gray-400 mb-12">1v1 Trading. Real Markets. Real Skills.</p>
       
       <div className="flex gap-4">

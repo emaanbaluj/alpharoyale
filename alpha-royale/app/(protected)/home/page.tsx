@@ -2,6 +2,7 @@
 import { useRouter } from "next/navigation"
 import { supabase } from "../../auth/supabaseClient/supabaseClient";
 import { useEffect, useState } from "react";
+import Image from "next/image";
 
 export default function HomeScreen() {
 
@@ -14,7 +15,7 @@ export default function HomeScreen() {
     return(
         <div className="flex h-screen">
             <div className="w-64 bg-gray-900 text-white p-6">
-                <h1 className="text-2xl font-bold mb-8">Alpha Royale</h1>
+                <Image src="/alpha_royal_logo.png" alt="Logo" width={120} height={120} className="mb-6 mx-auto" />
                 <p className="mb-4 text-gray-300 text-sm truncate">{email}</p>
                 <button 
                     className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded font-medium mb-6" 
