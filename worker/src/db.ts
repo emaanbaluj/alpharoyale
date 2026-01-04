@@ -204,12 +204,10 @@ export async function updateGamePlayerBalanceInDB(
 export async function fetchPositionsFromDB(
   supabase: SupabaseClient,
   gameId?: string,
-  playerId?: string,
   status?: string
 ): Promise<PositionRow[]> {
   let query = supabase.from("positions").select("*");
   if (gameId) query = query.eq("game_id", gameId);
-  if (playerId) query = query.eq("player_id", playerId);
   if (status) query = query.eq("status", status);
 
   const { data, error } = await query;
@@ -423,6 +421,3 @@ export async function insertEquityHistoryInDB(
   if (error) throw new Error(error.message);
 }
 
-export async function updateEquityHistoryInDB(){
-
-}

@@ -1,44 +1,42 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import * as db from "./db";
 
+// Get latest price from database
+async function getLatestPricesBySymbol(
+  supabase: SupabaseClient,
+  symbols: string[]
+): Promise<Map<string, number>> {
+  const priceBySymbol = new Map<string, number>();
 
-// Process all market orders, insert new postion, order execution and updates player balances
+  for (const sym of symbols) {
+    const rows = await db.fetchPriceDataFromDB(supabase, sym, 1);
+    if (rows[0]) priceBySymbol.set(sym, Number(rows[0].price));
+  }
+
+  return priceBySymbol;
+}
+
 export async function processMarketOrders(
   supabase: SupabaseClient,
   gameId: string,
   tick: number
 ): Promise<void> {
-  // 1) Load pending MARKET orders for this game
+  // 1) Fetch pending market orders
   const marketOrders = await db.fetchOrdersFromDB(supabase, gameId, "pending", "MARKET");
   if (marketOrders.length === 0) return;
 
-  // 2) Load players once (so we can read/update balances)
-  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
-  const playerByUserId = new Map(players.map((p) => [p.user_id, p]));
-
-  // 3) Load latest prices once per symbol
+  // 2) Preload latest prices (1 per symbol)
   const symbols = Array.from(new Set(marketOrders.map((o) => o.symbol)));
   const priceBySymbol = await getLatestPricesBySymbol(supabase, symbols);
 
-  // 4) Execute each order
+  // 3) Preload open positions for quick lookup (player+symbol)
+  const openPositions = await db.fetchPositionsFromDB(supabase, gameId,  "open");
+  const posByKey = new Map(openPositions.map((p) => [`${p.player_id}:${p.symbol}`, p]));
+
+  // 4) Process each order
   for (const order of marketOrders) {
-    // v1: BUY-only
-    if (order.side !== "BUY") {
-      await db.updateOrderInDB(supabase, order.id, "rejected");
-      continue;
-    }
-
-    const player = playerByUserId.get(order.player_id);
-    if (!player) {
-      await db.updateOrderInDB(supabase, order.id, "rejected");
-      continue;
-    }
-
     const fillPrice = priceBySymbol.get(order.symbol);
-    if (fillPrice == null) {
-      // no price available this tick -> leave pending
-      continue;
-    }
+    if (fillPrice == null) continue; // no price this tick => keep pending
 
     const qty = Number(order.quantity);
     if (!Number.isFinite(qty) || qty <= 0) {
@@ -46,32 +44,55 @@ export async function processMarketOrders(
       continue;
     }
 
-    const balance = Number(player.balance);
-    const notional = qty * fillPrice;
-
-    if (balance < notional) {
-      await db.updateOrderInDB(supabase, order.id, "rejected");
+    if (order.side === "BUY") {
+      await handleBuyMarketOrder(supabase, gameId, tick, order, qty, fillPrice, posByKey);
       continue;
     }
 
-    // A) Mark order filled
-    await db.updateOrderInDB(supabase, order.id, "filled", fillPrice);
+    if (order.side === "SELL") {
+      await handleSellMarketOrder(supabase, gameId, tick, order, qty, fillPrice, posByKey);
+      continue;
+    }
 
-    // B) Record execution (audit trail)
-    await db.insertOrderExecutionInDB(
-      supabase,
-      order.id,
-      gameId,
-      order.player_id,
-      order.symbol,
-      "BUY",
-      qty,
-      fillPrice,
-      tick
-    );
+    // unknown side
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+  }
+}
 
-    // C) Create position (one fill => one position, v1)
-    await db.insertPositionInDB(
+
+async function handleBuyMarketOrder(
+  supabase: SupabaseClient,
+  gameId: string,
+  tick: number,
+  order: any,
+  qty: number,
+  fillPrice: number,
+  posByKey: Map<string, any>
+): Promise<void> {
+
+   // C) Create or merge position (v1: one open position per (player,symbol))
+  const key = `${order.player_id}:${order.symbol}`;
+  const existing = posByKey.get(key);
+
+  // A) Fill order
+  await db.updateOrderInDB(supabase, order.id, "filled", fillPrice);
+
+  // B) Log execution
+  await db.insertOrderExecutionInDB(
+    supabase,
+    order.id,
+    gameId,
+    order.player_id,
+    order.symbol,
+    "BUY",
+    qty,
+    fillPrice,
+    tick
+  );
+
+
+  if (!existing) {
+    const created = await db.insertPositionInDB(
       supabase,
       gameId,
       order.player_id,
@@ -81,34 +102,136 @@ export async function processMarketOrders(
       fillPrice,
       1
     );
+    posByKey.set(key, created);
+    return;
+  }
+}
 
-    // D) Update cash balance (equity recalculated later in updateEquity)
-    const newBalance = balance - notional;
+async function handleSellMarketOrder(
+  supabase: SupabaseClient,
+  gameId: string,
+  tick: number,
+  order: any,
+  qty: number,
+  fillPrice: number,
+  posByKey: Map<string, any>
+): Promise<void> {
+  // Must have an open long position to sell against (v1)
+  const key = `${order.player_id}:${order.symbol}`;
+  const existing = posByKey.get(key);
 
-    await db.updateGamePlayerBalanceInDB(
+  if (!existing || existing.side !== "BUY") {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
+  }
+
+  const posQty = Number(existing.quantity);
+
+  // v1: reject oversell (later you can partial fill)
+  if (qty > posQty) {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
+  }
+
+  // A) Fill order
+  await db.updateOrderInDB(supabase, order.id, "filled", fillPrice);
+
+  // B) Log execution
+  await db.insertOrderExecutionInDB(
+    supabase,
+    order.id,
+    gameId,
+    order.player_id,
+    order.symbol,
+    "SELL",
+    qty,
+    fillPrice,
+    tick
+  );
+
+  // C) Log Position
+  if (!existing) {
+    const created = await db.insertPositionInDB(
       supabase,
       gameId,
       order.player_id,
-      newBalance,
-      Number(player.equity)
+      order.symbol,
+      "BUY",
+      qty,
+      fillPrice,
+      1
     );
-
-    // Keep local copy updated so multiple orders in the same tick work correctly
-    player.balance = newBalance as any;
-    playerByUserId.set(order.player_id, player);
+    posByKey.set(key, created);
+    return;
   }
 }
 
-async function getLatestPricesBySymbol(
+// Update open positions with current price and new unrealized pnl
+export async function updatePositions(
   supabase: SupabaseClient,
-  symbols: string[]
-): Promise<Map<string, number>> {
-  const map = new Map<string, number>();
+  gameId: string
+): Promise<void> {
 
-  for (const sym of symbols) {
-    const rows = await db.fetchPriceDataFromDB(supabase, sym, 1);
-    if (rows[0]) map.set(sym, Number(rows[0].price));
+  const openPositions = await db.fetchPositionsFromDB(supabase, gameId, "open");
+  if (openPositions.length === 0) return;
+
+  // Preload prices once
+  const symbols = Array.from(new Set(openPositions.map((p: any) => p.symbol)));
+  const priceBySymbol = await getLatestPricesBySymbol(supabase, symbols);
+
+  for (const pos of openPositions) {
+    const last = priceBySymbol.get(pos.symbol);
+    if (last == null) continue;
+
+    const qty = Number(pos.quantity);
+    const entry = Number(pos.entry_price);
+    const lev = Number(pos.leverage ?? 1);
+
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    if (!Number.isFinite(entry) || entry <= 0) continue;
+    if (!Number.isFinite(lev) || lev <= 0) continue;
+
+   
+    const unrealizedPnl =
+      pos.side === "BUY"
+        ? (last - entry) * qty * lev
+        : pos.side === "SELL"
+          ? (entry - last) * qty * lev
+          : 0;
+
+    await db.updatePositionInDB(supabase, pos.id, {
+      currentPrice: last,
+      unrealizedPnl,
+    });
+  }
+}
+
+// Update player balances
+export async function updatePlayerBalances(supabase: SupabaseClient, gameId: string) {
+  // group open positions by player and sum unrealised pnl
+  const openPositions = await db.fetchPositionsFromDB(supabase, gameId,  "open");
+
+  const unrealisedByPlayer = new Map<string, number>();
+  for (const pos of openPositions) {
+    const pnl = Number(pos.unrealized_pnl ?? 0);
+    unrealisedByPlayer.set(
+      pos.player_id,
+      (unrealisedByPlayer.get(pos.player_id) ?? 0) + (Number.isFinite(pnl) ? pnl : 0)
+    );
   }
 
-  return map;
+  // load players (cash balances)
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId); 
+
+  // update equity = balance + unrealised
+  for (const p of players) {
+    const balance = Number(p.balance ?? 0);
+    const unrealised = unrealisedByPlayer.get(p.user_id) ?? 0;
+    const equity = balance + unrealised;
+
+    await db.updateGamePlayerBalanceInDB(supabase, gameId, p.user_id, balance, equity);
+  }
 }
+
+
+
