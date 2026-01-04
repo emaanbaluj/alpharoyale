@@ -284,7 +284,7 @@ export async function fetchOrdersFromDB(
   let query = supabase.from("orders").select("*");
   if (gameId) query = query.eq("game_id", gameId);
   if (status) query = query.eq("status", status);
-  if (orderType) query = query.eq("orderType", orderType);
+  if (orderType) query = query.eq("order_type", orderType);
 
   const { data, error } = await query;
   if (error) throw new Error(`Supabase error: ${error.message}`);
