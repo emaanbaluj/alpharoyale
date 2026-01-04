@@ -40,3 +40,24 @@
 // };
 
 
+// worker/src/index.ts
+import { getSupabase } from "./db";
+import * as db from "./db";
+import { processMarketOrders } from "./game"; // <- adjust path if different
+
+type Env = {
+  SUPABASE_URL: string;
+  SUPABASE_SERVICE_ROLE_KEY: string;
+  SEED_KEY?: string;
+  TEST_USER_1?: string;
+};
+
+function isAllowed(request: Request, env: Env) {
+  const headerKey = (request.headers.get("x-seed-key") ?? "").trim();
+  const envKey = (env.SEED_KEY ?? "").trim();
+  return headerKey !== "" && envKey !== "" && headerKey === envKey;
+}
+
+export default {
+
+};

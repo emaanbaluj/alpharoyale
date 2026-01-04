@@ -1,78 +1,10 @@
-var __create = Object.create;
 var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
-};
-var __commonJS = (cb, mod) => function __require() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-};
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-  }
-  return to;
-};
-var __reExport = (target, mod, secondTarget) => (__copyProps(target, mod, "default"), secondTarget && __copyProps(secondTarget, mod, "default"));
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-  mod
-));
 
-// wrangler-modules-watch:wrangler:modules-watch
-var init_wrangler_modules_watch = __esm({
-  "wrangler-modules-watch:wrangler:modules-watch"() {
-    init_modules_watch_stub();
-  }
-});
+// src/index.ts
+var src_default = {};
 
-// ../../.npm/_npx/32026684e21afda6/node_modules/wrangler/templates/modules-watch-stub.js
-var init_modules_watch_stub = __esm({
-  "../../.npm/_npx/32026684e21afda6/node_modules/wrangler/templates/modules-watch-stub.js"() {
-    init_wrangler_modules_watch();
-  }
-});
-
-// worker/src/index.ts
-var require_src = __commonJS({
-  "worker/src/index.ts"() {
-    init_modules_watch_stub();
-  }
-});
-
-// .wrangler/tmp/bundle-nPCJe6/middleware-loader.entry.ts
-var middleware_loader_entry_exports = {};
-__export(middleware_loader_entry_exports, {
-  __INTERNAL_WRANGLER_MIDDLEWARE__: () => __INTERNAL_WRANGLER_MIDDLEWARE__,
-  default: () => middleware_loader_entry_default
-});
-init_modules_watch_stub();
-
-// .wrangler/tmp/bundle-nPCJe6/middleware-insertion-facade.js
-var middleware_insertion_facade_exports = {};
-__export(middleware_insertion_facade_exports, {
-  __INTERNAL_WRANGLER_MIDDLEWARE__: () => __INTERNAL_WRANGLER_MIDDLEWARE__,
-  default: () => middleware_insertion_facade_default
-});
-init_modules_watch_stub();
-var OTHER_EXPORTS = __toESM(require_src());
-
-// ../../.npm/_npx/32026684e21afda6/node_modules/wrangler/templates/middleware/middleware-ensure-req-body-drained.ts
-init_modules_watch_stub();
+// ../../../.npm/_npx/32026684e21afda6/node_modules/wrangler/templates/middleware/middleware-ensure-req-body-drained.ts
 var drainBody = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx) => {
   try {
     return await middlewareCtx.next(request, env);
@@ -90,8 +22,7 @@ var drainBody = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "drainBody");
 var middleware_ensure_req_body_drained_default = drainBody;
 
-// ../../.npm/_npx/32026684e21afda6/node_modules/wrangler/templates/middleware/middleware-miniflare3-json-error.ts
-init_modules_watch_stub();
+// ../../../.npm/_npx/32026684e21afda6/node_modules/wrangler/templates/middleware/middleware-miniflare3-json-error.ts
 function reduceError(e) {
   return {
     name: e?.name,
@@ -114,16 +45,14 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-nPCJe6/middleware-insertion-facade.js
-__reExport(middleware_insertion_facade_exports, __toESM(require_src()));
+// .wrangler/tmp/bundle-hrHQII/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
 ];
-var middleware_insertion_facade_default = OTHER_EXPORTS.default;
+var middleware_insertion_facade_default = src_default;
 
-// ../../.npm/_npx/32026684e21afda6/node_modules/wrangler/templates/middleware/common.ts
-init_modules_watch_stub();
+// ../../../.npm/_npx/32026684e21afda6/node_modules/wrangler/templates/middleware/common.ts
 var __facade_middleware__ = [];
 function __facade_register__(...args) {
   __facade_middleware__.push(...args.flat());
@@ -148,8 +77,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-nPCJe6/middleware-loader.entry.ts
-__reExport(middleware_loader_entry_exports, middleware_insertion_facade_exports);
+// .wrangler/tmp/bundle-hrHQII/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;
@@ -167,31 +95,31 @@ var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
     this.#noRetry();
   }
 };
-function wrapExportedHandler(worker2) {
+function wrapExportedHandler(worker) {
   if (__INTERNAL_WRANGLER_MIDDLEWARE__ === void 0 || __INTERNAL_WRANGLER_MIDDLEWARE__.length === 0) {
-    return worker2;
+    return worker;
   }
   for (const middleware of __INTERNAL_WRANGLER_MIDDLEWARE__) {
     __facade_register__(middleware);
   }
   const fetchDispatcher = /* @__PURE__ */ __name(function(request, env, ctx) {
-    if (worker2.fetch === void 0) {
+    if (worker.fetch === void 0) {
       throw new Error("Handler does not export a fetch() function.");
     }
-    return worker2.fetch(request, env, ctx);
+    return worker.fetch(request, env, ctx);
   }, "fetchDispatcher");
   return {
-    ...worker2,
+    ...worker,
     fetch(request, env, ctx) {
       const dispatcher = /* @__PURE__ */ __name(function(type, init) {
-        if (type === "scheduled" && worker2.scheduled !== void 0) {
+        if (type === "scheduled" && worker.scheduled !== void 0) {
           const controller = new __Facade_ScheduledController__(
             Date.now(),
             init.cron ?? "",
             () => {
             }
           );
-          return worker2.scheduled(controller, env, ctx);
+          return worker.scheduled(controller, env, ctx);
         }
       }, "dispatcher");
       return __facade_invoke__(request, env, ctx, dispatcher, fetchDispatcher);
