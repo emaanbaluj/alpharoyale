@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { supabase } from '../auth/supabaseClient/supabaseClient';
 import { orderAPI, positionAPI, gameAPI } from '../lib/api';
 import { subscribeToGamePlayers, subscribeToPositions } from '../lib/subscriptions';
+import { PriceChart } from './charts/PriceChart';
 
 interface Position {
   id: string;
@@ -14,6 +15,19 @@ interface Position {
   current_price: number;
   unrealized_pnl: number;
 }
+
+interface TickerPriceData {
+  ticker: CompatibleTickers;
+  price: PriceUnit[];
+}
+
+interface PriceUnit {
+  time: string;
+  value: number;
+}
+
+const COMPATIBLETICKERS = ["ETH", "BTC", "AAPL"] as const;
+type CompatibleTickers = (typeof COMPATIBLETICKERS)[number];
 
 export default function GamePage() {
   const searchParams = useSearchParams();
@@ -27,7 +41,41 @@ export default function GamePage() {
   const [opponentBalance, setOpponentBalance] = useState(10000);
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(false);
+  const [selectedChartTicker, setSelectedChartTicker] = useState<CompatibleTickers>("BTC");
+  const [marketData, setMarketData] = useState<Partial<Record<CompatibleTickers, TickerPriceData>>>({});
 
+  // tejas: i chatgpt generated this to fabricate data so we can test
+  // it generates a data point every 20 seconds -----------------------
+  const generateTickerData = (ticker: CompatibleTickers): TickerPriceData => {
+    const points: PriceUnit[] = [];
+    const startTime = new Date();
+    const basePrices = { ETH: 2500, BTC: 65000, AAPL: 190 };
+    let currentPrice = basePrices[ticker];
+    for (let i = 0; i < 360; i++) {
+      const time = new Date(startTime.getTime() - i * 20000);
+      const variance = currentPrice * (Math.random() * 0.001 - 0.0005);
+      currentPrice += variance;
+
+      points.push({
+        time: time.toISOString(),
+        value: parseFloat(currentPrice.toFixed(2))
+      });
+    }
+
+    return {
+      ticker,
+      price: points.reverse()
+    };
+  };
+  useEffect(() => {
+    const initialData: Record<string, TickerPriceData> = {};
+    COMPATIBLETICKERS.forEach(ticker => {
+      initialData[ticker] = generateTickerData(ticker);
+    });
+    setMarketData(initialData);
+  }, []);
+  // ------------------------------------------------------------------
+  
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (user) {
@@ -92,9 +140,11 @@ export default function GamePage() {
     }
   }
 
+  if (!marketData) return <div>Loading...</div>;
+
   return (
     <div className="h-screen bg-gray-900 p-6">
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-8xl mx-auto">
         <div className="flex justify-between items-center mb-6 text-white">
           <h1 className="text-2xl font-bold">Alpha Royale - {gameId || 'Loading...'}</h1>
           <div className="flex gap-4">
@@ -103,12 +153,27 @@ export default function GamePage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-6">
-          <div className="col-span-2">
+        <div className="grid grid-cols-7 gap-6">
+          <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
+            <h3 className="font-bold mb-1 text-white">Current Prices</h3>
+            <h1 className="text-xs mb-3 text-white">Click on the ticker to view historical data in the chart</h1>
+            <div className="space-y-2 text-sm text-gray-300">
+              {COMPATIBLETICKERS.map((t) => (
+                <button key={t} onClick={() => setSelectedChartTicker(t)} className="w-full">
+                  <div className="flex justify-between w-full">
+                    <span>{t}</span>
+                    <span>$150.00</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="col-span-4">
             <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
-              <h2 className="font-bold mb-2 text-white">Market Chart</h2>
-              <div className="h-64 bg-gray-900 flex items-center justify-center">
-                <div className="text-gray-500">Price chart will render here</div>
+              <h2 className="font-bold mb-2 text-white">Market Chart | {selectedChartTicker}</h2>
+              <div className="h-90 bg-gray-900 flex items-center justify-center">
+                <PriceChart data={marketData[selectedChartTicker]?.price ?? []}/>
               </div>
             </div>
 
@@ -120,25 +185,7 @@ export default function GamePage() {
             </div>
           </div>
 
-          <div>
-            <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
-              <h3 className="font-bold mb-3 text-white">Current Prices</h3>
-              <div className="space-y-2 text-sm text-gray-300">
-                <div className="flex justify-between">
-                  <span>BTC</span>
-                  <span>$42,150.00</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>ETH</span>
-                  <span>$2,245.50</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>AAPL</span>
-                  <span>$178.20</span>
-                </div>
-              </div>
-            </div>
-
+          <div className="col-span-2">
             <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
               <h3 className="font-bold mb-3 text-white">Place Order</h3>
               <select 
