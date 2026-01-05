@@ -264,6 +264,16 @@ async function handleBuyMarketOrder(
     tick
   );
 
+  // D) Deduct balance (cost of purchase)
+  const cost = fillPrice * qty;
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
+  const player = players.find(p => p.user_id === order.player_id);
+  if (player) {
+    const newBalance = Number(player.balance) - cost;
+    // Get current equity (will be recalculated by updatePlayerBalances later)
+    const currentEquity = Number(player.equity);
+    await db.updateGamePlayerBalanceInDB(supabase, gameId, order.player_id, newBalance, currentEquity);
+  }
 
   if (!existing) {
     const created = await db.insertPositionInDB(
@@ -323,19 +333,28 @@ async function handleSellMarketOrder(
     tick
   );
 
-  // C) Log Position
-  if (!existing) {
-    const created = await db.insertPositionInDB(
-      supabase,
-      gameId,
-      order.player_id,
-      order.symbol,
-      "BUY",
-      qty,
-      fillPrice,
-      1
-    );
-    posByKey.set(key, created);
+  // C) Add balance (proceeds from sale)
+  const proceeds = fillPrice * qty;
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
+  const player = players.find(p => p.user_id === order.player_id);
+  if (player) {
+    const newBalance = Number(player.balance) + proceeds;
+    // Get current equity (will be recalculated by updatePlayerBalances later)
+    const currentEquity = Number(player.equity);
+    await db.updateGamePlayerBalanceInDB(supabase, gameId, order.player_id, newBalance, currentEquity);
+  }
+
+  // D) Close or reduce position
+  if (qty === posQty) {
+    // Close position completely
+    await db.updatePositionInDB(supabase, existing.id, {
+      status: "closed",
+      closed_at: new Date().toISOString(),
+    });
+    posByKey.delete(key);
+  } else {
+    // Partial close - reduce quantity (not implemented in v1, reject for now)
+    await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 }

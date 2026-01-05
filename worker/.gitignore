@@ -21,4 +21,7 @@ Thumbs.db
 # TypeScript
 *.tsbuildinfo
 
+# Supabase CLI
+supabase/
+
 

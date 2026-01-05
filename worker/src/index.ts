@@ -129,41 +129,6 @@ const handler = {
       );
     }
 
-    // Test service binding endpoint
-    if (path === '/test-service-binding' && request.method === 'POST') {
-      try {
-        const testResponse = await env.GAME_TICK_WORKER.fetch(
-          new Request('http://internal/game-tick', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gameId: 'test', gameState: 0 }),
-          })
-        );
-        const testResult = await testResponse.json();
-        return new Response(
-          JSON.stringify({ 
-            serviceBindingWorking: true, 
-            gameTickWorkerResponse: testResult,
-            statusCode: testResponse.status,
-          }),
-          {
-            headers: { 'Content-Type': 'application/json' },
-          }
-        );
-      } catch (error) {
-        return new Response(
-          JSON.stringify({ 
-            serviceBindingWorking: false,
-            error: error instanceof Error ? error.message : 'Unknown error',
-          }),
-          {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' },
-          }
-        );
-      }
-    }
-
     // 404 for unknown routes
     return new Response('Not Found', { status: 404 });
   },
