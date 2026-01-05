@@ -9,7 +9,7 @@ async function getLatestPricesBySymbol(
   const priceBySymbol = new Map<string, number>();
 
   for (const sym of symbols) {
-    const rows = await db.fetchPriceDataFromDB(supabase, [sym], 1);
+    const rows = await db.fetchPriceDataFromDB(supabase, sym, 1);
     if (rows[0]) priceBySymbol.set(sym, Number(rows[0].price));
   }
 
@@ -199,15 +199,17 @@ export async function updatePositions(
           ? (entry - last) * qty * lev
           : 0;
 
-    // Update position with current price and unrealized P&L
-    await db.updatePositionInDB(supabase, pos.id, undefined, last, unrealizedPnl);
+    await db.updatePositionInDB(supabase, pos.id, {
+      currentPrice: last,
+      unrealizedPnl,
+    });
   }
 }
 
 // Update player balances
 export async function updatePlayerBalances(supabase: SupabaseClient, gameId: string) {
   // group open positions by player and sum unrealised pnl
-  const openPositions = await db.fetchPositionsFromDB(supabase, gameId, "open");
+  const openPositions = await db.fetchPositionsFromDB(supabase, gameId,  "open");
 
   const unrealisedByPlayer = new Map<string, number>();
   for (const pos of openPositions) {
@@ -219,7 +221,7 @@ export async function updatePlayerBalances(supabase: SupabaseClient, gameId: str
   }
 
   // load players (cash balances)
-  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId); 
 
   // update equity = balance + unrealised
   for (const p of players) {
@@ -231,33 +233,5 @@ export async function updatePlayerBalances(supabase: SupabaseClient, gameId: str
   }
 }
 
-/**
- * Process a game tick for a single game.
- * This function orchestrates all game logic for a single tick.
- *
- * @param gameId - The ID of the game to process
- * @param gameState - The current game state (tick number)
- * @param supabase - Supabase client instance
- */
-export async function processGameTick(
-  gameId: string,
-  gameState: number,
-  supabase: SupabaseClient
-): Promise<void> {
-  console.log(`Processing game tick for game ${gameId} at game state ${gameState}`);
 
-  // 1. Process market orders
-  await processMarketOrders(supabase, gameId, gameState);
-
-  // 2. Update positions with current prices and unrealized P&L
-  await updatePositions(supabase, gameId);
-
-  // 3. Update player balances and equity
-  await updatePlayerBalances(supabase, gameId);
-
-  // TODO: Add TP/SL order processing here
-  // TODO: Add equity history recording here
-
-  console.log(`Completed game tick processing for game ${gameId}`);
-}
 
