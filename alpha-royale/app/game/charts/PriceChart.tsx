@@ -17,6 +17,14 @@ type PriceChartProps = {
 
 const isoToUTCTimestamp = (iso: string) => Math.floor(new Date(iso).getTime() / 1000) as UTCTimestamp;
 
+const deduplicateData = (data: LineData[]): LineData[] => {
+  const map = new Map<number, number>();
+  data.forEach(point => {
+    map.set(point.time as number, point.value);
+  });
+  return Array.from(map.entries()).map(([time, value]) => ({ time: time as UTCTimestamp, value })).sort((a, b) => (a.time as number) - (b.time as number));
+};
+
 export const PriceChart: React.FC<PriceChartProps> = ({ data1, data2 = [], showData2 = false, height = 300 }) => {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const chartRef = useRef<IChartApi | null>(null);
@@ -24,17 +32,19 @@ export const PriceChart: React.FC<PriceChartProps> = ({ data1, data2 = [], showD
     const series2Ref = useRef<ISeriesApi<'Line'> | null>(null);
 
     const chartData1: LineData[] = useMemo(() => {
-        return [...data1].map((p) => ({
+        const mapped = data1.map((p) => ({
             time: isoToUTCTimestamp(p.time),
             value: p.value,
-        })).sort((a, b) => (a.time as number) - (b.time as number));
+        }));
+        return deduplicateData(mapped);
     }, [data1]);
 
     const chartData2: LineData[] = useMemo(() => {
-        return [...data2].map((p) => ({
+        const mapped = data2.map((p) => ({
             time: isoToUTCTimestamp(p.time),
             value: p.value,
-        })).sort((a, b) => (a.time as number) - (b.time as number));
+        }));
+        return deduplicateData(mapped);
     }, [data2]);
 
     useEffect(() => {
@@ -66,6 +76,15 @@ export const PriceChart: React.FC<PriceChartProps> = ({ data1, data2 = [], showD
             lineWidth: 2,
         });
 
+        if (chartData1.length) {
+            series1.setData(chartData1);
+            chart.timeScale().fitContent();
+        }
+
+        if (showData2 && chartData2.length) {
+            series2.setData(chartData2);
+        }
+
         chartRef.current = chart;
         series1Ref.current = series1;
         series2Ref.current = series2;
@@ -76,8 +95,11 @@ export const PriceChart: React.FC<PriceChartProps> = ({ data1, data2 = [], showD
         return () => {
             window.removeEventListener('resize', handleResize);
             chart.remove();
+            chartRef.current = null;
+            series1Ref.current = null;
+            series2Ref.current = null;
         };
-    }, [height]);
+    }, []);
 
     useEffect(() => {
         if (!series1Ref.current || !chartData1.length) return;

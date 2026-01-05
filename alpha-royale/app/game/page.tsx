@@ -47,17 +47,18 @@ export default function GamePage() {
   const [oppEquityChartData, setOppEquityChartData] = useState<ChartUnit[]>([]);  // opponent equity curve
   const [showOppEquityCurve, setShowOppEquityCurve] = useState<boolean>(false); 
 
-  const addDataPoint = (myPortfolioValue: number, oppPortfolioValue: number, newTimeValue: string) => {
-    const myNewEntry: ChartUnit = {
-      time: newTimeValue,
-      value: myPortfolioValue,
-    };
-    const oppNewEntry: ChartUnit = {
-      time: newTimeValue,
-      value: oppPortfolioValue,
-    };
-    setMyEquityChartData((prevData) => [...prevData, myNewEntry]);
-    setOppEquityChartData((prevData) => [...prevData, oppNewEntry]);
+  const addDataPoints = (dataPoints: { myValue: number; oppValue: number; time: string }[]) => {
+    const myNewEntries: ChartUnit[] = dataPoints.map(dp => ({
+      time: dp.time,
+      value: dp.myValue,
+    }));
+    const oppNewEntries: ChartUnit[] = dataPoints.map(dp => ({
+      time: dp.time,
+      value: dp.oppValue,
+    }));
+    
+    setMyEquityChartData(prev => [...prev, ...myNewEntries]);
+    setOppEquityChartData(prev => [...prev, ...oppNewEntries]);
   };
 
   // tejas: i chatgpt generated this to fabricate data so we can test
@@ -94,14 +95,16 @@ export default function GamePage() {
 
   // tejas: fake data for equity chart for testing --------------------
   useEffect(() => {
-    addDataPoint(10000, 10000, "2026-01-05T12:00:00Z");
-    addDataPoint(10500, 9900, "2026-01-05T12:00:20Z");
-    addDataPoint(10700, 9990, "2026-01-05T12:00:40Z");
-    addDataPoint(10800, 11000, "2026-01-05T12:01:00Z");
-    addDataPoint(10600, 12000, "2026-01-05T12:01:20Z");
-    addDataPoint(10750, 12500,"2026-01-05T12:01:40Z");
-    addDataPoint(10900, 12800, "2026-01-05T12:02:00Z");
-    addDataPoint(11000, 12900, "2026-01-05T12:02:20Z");
+    addDataPoints([
+      { myValue: 10000, oppValue: 10000, time: "2026-01-05T12:00:00Z" },
+      { myValue: 10500, oppValue: 9900, time: "2026-01-05T12:00:20Z" },
+      { myValue: 10700, oppValue: 9990, time: "2026-01-05T12:00:40Z" },
+      { myValue: 10800, oppValue: 11000, time: "2026-01-05T12:01:00Z" },
+      { myValue: 10600, oppValue: 12000, time: "2026-01-05T12:01:20Z" },
+      { myValue: 10750, oppValue: 12500, time: "2026-01-05T12:01:40Z" },
+      { myValue: 10900, oppValue: 12800, time: "2026-01-05T12:02:00Z" },
+      { myValue: 11000, oppValue: 12900, time: "2026-01-05T12:02:20Z" },
+    ]);
   }, []);
   // ------------------------------------------------------------------
   
