@@ -1,0 +1,23 @@
+{
+  "name": "alpharoyale-worker",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "wrangler dev -c wrangler.toml -c wrangler-game-tick.toml",
+    "dev:main": "wrangler dev",
+    "dev:game-tick": "wrangler dev --config wrangler-game-tick.toml",
+    "deploy:main": "wrangler deploy",
+    "deploy:game-tick": "wrangler deploy --config wrangler-game-tick.toml",
+    "deploy:all": "npm run deploy:game-tick && npm run deploy:main"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "typescript": "^5.6.3",
+    "wrangler": "^4.54.0"
+  },
+  "peerDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.89.0"
+  }
+}
