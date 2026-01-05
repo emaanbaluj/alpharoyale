@@ -3,65 +3,84 @@ import { useRouter } from "next/navigation"
 import { supabase } from "../../auth/supabaseClient/supabaseClient";
 import { useEffect, useState } from "react";
 import Image from "next/image";
+import { gameAPI, statsAPI } from "../../lib/api";
 
-interface OnGoingGameType {
-    opponent: string;
-    link: string;
-    timeRemaining: string;
-}
-
-interface OngoingGameList {
-    games: OnGoingGameType[];
+interface UserStats {
+    gamesPlayed: number;
+    wins: number;
+    winRate: string;
 }
 
 interface LeaderboardItem {
-    position: number;
-    username: string;
+    userId: string;
+    wins: number;
+    gamesPlayed: number;
     winRate: number;
 }
 
-interface LeaderboardList {
-    players: LeaderboardItem[];
-}
-
 export default function HomeScreen() {
-
     const router = useRouter();
 
     const [email, setEmail] = useState<string|null>(null);
-    async function handleLogout() { await supabase.auth.signOut(); router.push("/auth"); }
-    useEffect(() => {supabase.auth.getUser().then(({data:{user}}) => {setEmail(user?.email ?? null);});}, []);
-
-    const [ongoingGames, setOngoingGames] = useState<OngoingGameList>({ games: [] });
-    useEffect(() => {
-        const dummygame: OnGoingGameType = {
-            opponent: "dummy user 1",
-            link: "link.com",
-            timeRemaining: "1hr 35min",
-        };
-        const dummygame2: OnGoingGameType = {
-            opponent: "dummy user 2",
-            link: "link2.com",
-            timeRemaining: "1hr 55min",
-        };
-        setOngoingGames({ games: [dummygame, dummygame2] });
-    }, []);
-
+    const [userId, setUserId] = useState<string|null>(null);
+    const [userStats, setUserStats] = useState<UserStats>({ gamesPlayed: 0, wins: 0, winRate: "0" });
+    const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>([]);
     const [joinGameId, setJoinGameId] = useState<string>("");
+    const [loading, setLoading] = useState(false);
 
-    const [leaderboard, setLeaderboard] = useState<LeaderboardList>({ players: []});
+    async function handleLogout() { 
+        await supabase.auth.signOut(); 
+        router.push("/auth"); 
+    }
+
     useEffect(() => {
-        // testing testing 
-        // Generate 10 items dynamically
-        const mockPlayers: LeaderboardItem[] = Array.from({ length: 10 }, (_, index) => ({
-            position: index + 1,
-            username: `dummy user ${index + 1}`,
-            // Example logic: Start at 90 win rate and decrease by a random amount or fixed step
-            winRate: 90 - (index * 2), 
-        }));
-
-        setLeaderboard({ players: mockPlayers });
+        supabase.auth.getUser().then(({data:{user}}) => {
+            setEmail(user?.email ?? null);
+            setUserId(user?.id ?? null);
+            if (user?.id) {
+                loadUserStats(user.id);
+            }
+        });
+        loadLeaderboard();
     }, []);
+
+    async function loadUserStats(uid: string) {
+        const data = await statsAPI.getUserStats(uid);
+        if (data.gamesPlayed !== undefined) {
+            setUserStats(data);
+        }
+    }
+
+    async function loadLeaderboard() {
+        const data = await statsAPI.getLeaderboard();
+        if (data.leaderboard) {
+            setLeaderboard(data.leaderboard);
+        }
+    }
+
+    async function handleCreateGame() {
+        if (!userId) return;
+        setLoading(true);
+        const result = await gameAPI.createGame(userId);
+        setLoading(false);
+        if (result.game) {
+            router.push(`/game?id=${result.game.id}`);
+        } else {
+            alert('Failed to create game: ' + result.error);
+        }
+    }
+
+    async function handleJoinGame() {
+        if (!userId || !joinGameId) return;
+        setLoading(true);
+        const result = await gameAPI.joinGame(joinGameId, userId);
+        setLoading(false);
+        if (result.game) {
+            router.push(`/game?id=${joinGameId}`);
+        } else {
+            alert('Failed to join game: ' + result.error);
+        }
+    }
 
     return(
         <div className="flex min-h-screen">
@@ -71,18 +90,23 @@ export default function HomeScreen() {
                 
                 <div className="space-y-3">
                     <button 
-                        className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 rounded font-medium"
-                        onClick={() => router.push('/game')}
+                        className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 rounded font-medium disabled:opacity-50"
+                        onClick={handleCreateGame}
+                        disabled={loading}
                     >
-                        Start Game
+                        {loading ? 'Creating...' : 'Start Game'}
                     </button>
                     <div className="flex items-center gap-2">
                         <input
-                            id="joinGameId"type="text" value={joinGameId} placeholder="Enter Game ID"
+                            id="joinGameId" type="text" value={joinGameId} placeholder="Enter Game ID"
                             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setJoinGameId(e.target.value)}
-                            className="w-50 px-4 py-2 bg-gray-800 rounded font-medium"
+                            className="w-50 px-4 py-2 bg-gray-800 rounded font-medium text-white"
                         />
-                        <button className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded font-medium">
+                        <button 
+                            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded font-medium disabled:opacity-50"
+                            onClick={handleJoinGame}
+                            disabled={loading || !joinGameId}
+                        >
                             Join
                         </button>
                     </div>
@@ -106,21 +130,21 @@ export default function HomeScreen() {
                         <div className="border border-gray-700 bg-gray-900 p-4">
                             <h3 className="font-bold mb-2 text-white">Your Stats</h3>
                             <div className="text-sm space-y-1 text-gray-300">
-                                <div>Games Played: 0</div>
-                                <div>Win Rate: 0%</div>
-                                <div>Best Return: --</div>
+                                <div>Games Played: {userStats.gamesPlayed}</div>
+                                <div>Wins: {userStats.wins}</div>
+                                <div>Win Rate: {userStats.winRate}%</div>
                             </div>
                         </div>
                         <div className="border border-gray-700 bg-gray-900 p-4">
                             <h3 className="font-bold mb-2 text-white">Start a New Game</h3>
                             <p className="text-sm text-gray-400 mb-3">
-                                Click "Start Game" begin a 1v1 trading match with another user.
+                                Click "Start Game" to create a 1v1 trading match. Share the game ID with a friend.
                             </p>
                         </div> 
                         <div className="border border-gray-700 bg-gray-900 p-4">
                             <h3 className="font-bold mb-2 text-white">Join a Game</h3>
                             <p className="text-sm text-gray-400 mb-3">
-                                Enter the Game ID and click "Join" to enter a 1v1 trading match with your friend.
+                                Enter the Game ID and click "Join" to enter a 1v1 trading match.
                             </p>
                         </div> 
                     </div>
@@ -128,27 +152,9 @@ export default function HomeScreen() {
                        <div className="border border-gray-700 bg-gray-900 p-4">
                         <h3 className="font-bold mb-2 text-white">Ongoing Games</h3>
                         <div className="text-sm space-y-1">
-                            {ongoingGames.games.length === 0 ? (
-                                <p className="text-sm text-gray-400 mb-3">
-                                    No ongoing games at the moment.
-                                </p>
-                            ) : (
-                                <div className="space-y-3">
-                                    {ongoingGames.games.map((game, idx) => (
-                                    <div key={game.link ?? idx} className="border border-gray-800 p-4">
-                                        <p className="text-sm text-gray-300 mb-1 font-bold truncate">
-                                            {game.opponent}
-                                        </p>
-                                        <p className="text-sm text-gray-400 mb-1">
-                                            {game.timeRemaining} remaining
-                                        </p>
-                                        <button className="px-6 py-1 bg-green-600 hover:bg-green-700 rounded font-medium" >
-                                            Enter Game
-                                        </button>
-                                    </div>
-                                    ))}
-                                </div>
-                            )}
+                            <p className="text-sm text-gray-400 mb-3">
+                                Coming soon - view your active games here
+                            </p>
                         </div>
                     </div>  
 
@@ -156,19 +162,19 @@ export default function HomeScreen() {
                     <div className="border border-gray-700 bg-gray-900 p-4">
                         <h3 className="font-bold mb-2 text-white">Global Leaderboard</h3>
                         <div className="text-sm space-y-1">
-                            {leaderboard?.players.length === 0 ? (
+                            {leaderboard.length === 0 ? (
                                 <p className="text-sm text-gray-400 mb-3">
-                                    Loading...
+                                    No games played yet
                                 </p>
                             ) : (
-                                <div className="space-y-1">
-                                    {leaderboard.players.map((player, idx) => (
-                                    <div key={player.position ?? idx} className="p-1">
-                                        <p className="text-sm text-gray-300 mb-1 font-bold truncate">
-                                            {player.position}. {player.username}
+                                <div className="space-y-2">
+                                    {leaderboard.map((player, idx) => (
+                                    <div key={player.userId} className="p-2 bg-gray-800 rounded">
+                                        <p className="text-sm text-gray-300 font-bold truncate">
+                                            {idx + 1}. User {player.userId.slice(0, 8)}...
                                         </p>
-                                        <p>
-                                            Win Rate: {player.winRate}%
+                                        <p className="text-xs text-gray-400">
+                                            {player.wins}W / {player.gamesPlayed}G - {player.winRate.toFixed(1)}%
                                         </p>
                                     </div>
                                     ))}
