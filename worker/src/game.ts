@@ -60,6 +60,180 @@ export async function processMarketOrders(
 }
 
 
+export async function processConditionalOrders(
+  supabase: SupabaseClient,
+  gameId: string,
+  tick: number
+): Promise<void> {
+  // 1) Load pending conditional orders
+  const allOrders = await db.fetchOrdersFromDB(supabase, gameId);
+  const takeProfitOrders = allOrders.filter(
+    (o) => o.order_type === "TAKE_PROFIT" && o.status === "pending"
+  );
+  const stopLossOrders = allOrders.filter(
+    (o) => o.order_type === "STOP_LOSS" && o.status === "pending"
+  );
+
+  if (takeProfitOrders.length === 0 && stopLossOrders.length === 0) return;
+
+  // 2) Load open positions once (we only trigger TP/SL against open positions)
+  const openPositions = await db.fetchPositionsFromDB(supabase, gameId, "open");
+  const posById = new Map(openPositions.map((p) => [p.id, p]));
+
+  // 3) Load latest prices once per symbol used by conditional orders
+  const symbols = Array.from(
+    new Set([...takeProfitOrders, ...stopLossOrders].map((o) => o.symbol))
+  );
+  const priceBySymbol = await getLatestPricesBySymbol(supabase, symbols);
+
+  // 4) Handle TP then SL (order doesn’t matter much, but keep consistent)
+  for (const o of takeProfitOrders) {
+    await handleTakeProfitOrder(supabase, gameId, tick, o, posById, priceBySymbol);
+  }
+
+  for (const o of stopLossOrders) {
+    await handleStopLossOrder(supabase, gameId, tick, o, posById, priceBySymbol);
+  }
+}
+
+async function handleStopLossOrder(
+  supabase: SupabaseClient,
+  gameId: string,
+  tick: number,
+  order: any,
+  posById: Map<string, any>,
+  priceBySymbol: Map<string, number>
+): Promise<void> {
+  if (!order.position_id) {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
+  }
+
+  const pos = posById.get(order.position_id);
+  if (!pos) {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
+  }
+
+  // v1: long-only
+  if (pos.side !== "BUY") {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
+  }
+
+  const trigger = Number(order.trigger_price);
+  if (!Number.isFinite(trigger)) {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
+  }
+
+  const px = priceBySymbol.get(order.symbol);
+  if (px == null) return; // no price this tick -> leave pending
+
+  // SL condition for a long
+  if (px > trigger) return;
+
+  const qty = Number(pos.quantity);
+
+  // 1) fill order
+  await db.updateOrderInDB(supabase, order.id, "filled", px);
+
+  // 2) execution log
+  await db.insertOrderExecutionInDB(
+    supabase,
+    order.id,
+    gameId,
+    order.player_id,
+    order.symbol,
+    "SELL",
+    qty,
+    px,
+    tick
+  );
+
+  // 3) close position
+  const pnl = (px - Number(pos.entry_price)) * qty;
+
+  await db.updatePositionInDB(supabase, pos.id, {
+    status: "closed",
+    currentPrice: px,
+    unrealizedPnl: pnl,
+  });
+
+ 
+  posById.delete(pos.id);
+}
+
+async function handleTakeProfitOrder(
+  supabase: SupabaseClient,
+  gameId: string,
+  tick: number,
+  order: any,
+  posById: Map<string, any>,
+  priceBySymbol: Map<string, number>
+): Promise<void> {
+  if (!order.position_id) {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
+  }
+
+  const pos = posById.get(order.position_id);
+  if (!pos) {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
+  }
+
+  // v1: long-only
+  if (pos.side !== "BUY") {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
+  }
+
+  const trigger = Number(order.trigger_price);
+  if (!Number.isFinite(trigger)) {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
+  }
+
+  const px = priceBySymbol.get(order.symbol);
+  if (px == null) return; // no price this tick -> leave pending
+
+  // TP condition for a long
+  if (px < trigger) return;
+
+  const qty = Number(pos.quantity);
+
+  // 1) fill order
+  await db.updateOrderInDB(supabase, order.id, "filled", px);
+
+  // 2) execution log
+  await db.insertOrderExecutionInDB(
+    supabase,
+    order.id,
+    gameId,
+    order.player_id,
+    order.symbol,
+    "SELL",
+    qty,
+    px,
+    tick
+  );
+
+  // 3) close position
+  const pnl = (px - Number(pos.entry_price)) * qty;
+
+  await db.updatePositionInDB(supabase, pos.id, {
+    status: "closed",
+    currentPrice: px,
+    unrealizedPnl: pnl,
+  });
+
+  // remove from cache so SL can’t close it again this tick
+  posById.delete(pos.id);
+}
+
+
+// Handle Buy Market Order 
 async function handleBuyMarketOrder(
   supabase: SupabaseClient,
   gameId: string,
@@ -233,5 +407,27 @@ export async function updatePlayerBalances(supabase: SupabaseClient, gameId: str
   }
 }
 
+export async function updateEquityHistory(
+  supabase: SupabaseClient,
+  gameId: string,
+  tick: number
+): Promise<void> {
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
+  if (players.length === 0) return;
+
+  for (const p of players) {
+    const balance = Number(p.balance);
+    const equity = Number(p.equity);
+
+    await db.insertEquityHistoryInDB(
+      supabase,
+      gameId,
+      p.user_id,
+      tick,
+      balance,
+      equity
+    );
+  }
+}
 
 

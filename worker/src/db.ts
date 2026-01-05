@@ -275,7 +275,7 @@ export async function updatePositionInDB(
 // --------------------
 export async function fetchOrdersFromDB(
   supabase: SupabaseClient,
-  gameId?: string,
+  gameId: string,
   status?: string,
   orderType?: string,
 ): Promise<OrderRow[]> {
