@@ -427,6 +427,19 @@ export async function processGameTick(
 
   // 2. Update positions with current prices and unrealized P&L
   await updatePositions(supabase, gameId);
+
+  // 3. Update player balances and equity
+  await updatePlayerBalances(supabase, gameId);
+
+  // 4. Process conditional orders (TP/SL)
+  await processConditionalOrders(supabase, gameId, gameState);
+
+  // 5. Record equity history
+  await updateEquityHistory(supabase, gameId, gameState);
+
+  console.log(`Completed game tick processing for game ${gameId}`);
+}
+
 export async function updateEquityHistory(
   supabase: SupabaseClient,
   gameId: string,
@@ -448,14 +461,5 @@ export async function updateEquityHistory(
       equity
     );
   }
-}
-
-  // 3. Update player balances and equity
-  await updatePlayerBalances(supabase, gameId);
-
-  // TODO: Add TP/SL order processing here
-  // TODO: Add equity history recording here
-
-  console.log(`Completed game tick processing for game ${gameId}`);
 }
 
