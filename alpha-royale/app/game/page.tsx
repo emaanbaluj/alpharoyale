@@ -18,10 +18,10 @@ interface Position {
 
 interface TickerPriceData {
   ticker: CompatibleTickers;
-  price: PriceUnit[];
+  price: ChartUnit[];
 }
 
-interface PriceUnit {
+interface ChartUnit {
   time: string;
   value: number;
 }
@@ -43,11 +43,27 @@ export default function GamePage() {
   const [loading, setLoading] = useState(false);
   const [selectedChartTicker, setSelectedChartTicker] = useState<CompatibleTickers>("BTC");
   const [marketData, setMarketData] = useState<Partial<Record<CompatibleTickers, TickerPriceData>>>({});
+  const [myEquityChartData, setMyEquityChartData] = useState<ChartUnit[]>([]);
+  const [oppEquityChartData, setOppEquityChartData] = useState<ChartUnit[]>([]);  // opponent equity curve
+  const [showOppEquityCurve, setShowOppEquityCurve] = useState<boolean>(false); 
+
+  const addDataPoint = (myPortfolioValue: number, oppPortfolioValue: number, newTimeValue: string) => {
+    const myNewEntry: ChartUnit = {
+      time: newTimeValue,
+      value: myPortfolioValue,
+    };
+    const oppNewEntry: ChartUnit = {
+      time: newTimeValue,
+      value: oppPortfolioValue,
+    };
+    setMyEquityChartData((prevData) => [...prevData, myNewEntry]);
+    setOppEquityChartData((prevData) => [...prevData, oppNewEntry]);
+  };
 
   // tejas: i chatgpt generated this to fabricate data so we can test
   // it generates a data point every 20 seconds -----------------------
   const generateTickerData = (ticker: CompatibleTickers): TickerPriceData => {
-    const points: PriceUnit[] = [];
+    const points: ChartUnit[] = [];
     const startTime = new Date();
     const basePrices = { ETH: 2500, BTC: 65000, AAPL: 190 };
     let currentPrice = basePrices[ticker];
@@ -73,6 +89,19 @@ export default function GamePage() {
       initialData[ticker] = generateTickerData(ticker);
     });
     setMarketData(initialData);
+  }, []);
+  // ------------------------------------------------------------------
+
+  // tejas: fake data for equity chart for testing --------------------
+  useEffect(() => {
+    addDataPoint(10000, 10000, "2026-01-05T12:00:00Z");
+    addDataPoint(10500, 9900, "2026-01-05T12:00:20Z");
+    addDataPoint(10700, 9990, "2026-01-05T12:00:40Z");
+    addDataPoint(10800, 11000, "2026-01-05T12:01:00Z");
+    addDataPoint(10600, 12000, "2026-01-05T12:01:20Z");
+    addDataPoint(10750, 12500,"2026-01-05T12:01:40Z");
+    addDataPoint(10900, 12800, "2026-01-05T12:02:00Z");
+    addDataPoint(11000, 12900, "2026-01-05T12:02:20Z");
   }, []);
   // ------------------------------------------------------------------
   
@@ -173,14 +202,17 @@ export default function GamePage() {
             <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
               <h2 className="font-bold mb-2 text-white">Market Chart | {selectedChartTicker}</h2>
               <div className="h-90 bg-gray-900 flex items-center justify-center">
-                <PriceChart data={marketData[selectedChartTicker]?.price ?? []}/>
+                <PriceChart data1={marketData[selectedChartTicker]?.price ?? []}/>
               </div>
             </div>
 
             <div className="border border-gray-700 bg-gray-800 p-4">
-              <h2 className="font-bold mb-2 text-white">Equity Comparison</h2>
+              <div className="flex justify-between">
+                <h2 className="font-bold mb-2 text-white">Equity Comparison</h2>
+                <button className="text-sm mb-2" onClick={() => setShowOppEquityCurve(!showOppEquityCurve)}>{showOppEquityCurve ? 'Hide Opponent' : 'Show Opponent'}</button>
+              </div>
               <div className="h-32 bg-gray-900 flex items-center justify-center">
-                <div className="text-gray-500">Equity curves here</div>
+                <PriceChart data1={myEquityChartData} data2={oppEquityChartData} showData2={showOppEquityCurve}/>
               </div>
             </div>
           </div>

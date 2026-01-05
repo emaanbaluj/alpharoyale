@@ -9,23 +9,33 @@ type PricePoint = {
 };
 
 type PriceChartProps = {
-  data: PricePoint[];
+  data1: PricePoint[];
+  data2?: PricePoint[];
+  showData2?: boolean;
   height?: number;
 };
 
 const isoToUTCTimestamp = (iso: string) => Math.floor(new Date(iso).getTime() / 1000) as UTCTimestamp;
 
-export const PriceChart: React.FC<PriceChartProps> = ({ data, height = 300 }) => {
+export const PriceChart: React.FC<PriceChartProps> = ({ data1, data2 = [], showData2 = false, height = 300 }) => {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const chartRef = useRef<IChartApi | null>(null);
-    const seriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+    const series1Ref = useRef<ISeriesApi<'Line'> | null>(null);
+    const series2Ref = useRef<ISeriesApi<'Line'> | null>(null);
 
-    const chartData: LineData[] = useMemo(() => {
-        return [...data].map((p) => ({
+    const chartData1: LineData[] = useMemo(() => {
+        return [...data1].map((p) => ({
             time: isoToUTCTimestamp(p.time),
             value: p.value,
         })).sort((a, b) => (a.time as number) - (b.time as number));
-    }, [data]);
+    }, [data1]);
+
+    const chartData2: LineData[] = useMemo(() => {
+        return [...data2].map((p) => ({
+            time: isoToUTCTimestamp(p.time),
+            value: p.value,
+        })).sort((a, b) => (a.time as number) - (b.time as number));
+    }, [data2]);
 
     useEffect(() => {
         const container = containerRef.current;
@@ -46,13 +56,19 @@ export const PriceChart: React.FC<PriceChartProps> = ({ data, height = 300 }) =>
         timeScale: { borderColor: '#374151' },
         });
 
-        const series = chart.addSeries(LineSeries, {
-        color: '#3B82F6',
-        lineWidth: 2,
+        const series1 = chart.addSeries(LineSeries, {
+            color: '#3B82F6',
+            lineWidth: 2,
+        });
+
+        const series2 = chart.addSeries(LineSeries, {
+            color: '#10B981',
+            lineWidth: 2,
         });
 
         chartRef.current = chart;
-        seriesRef.current = series;
+        series1Ref.current = series1;
+        series2Ref.current = series2;
 
         const handleResize = () => chart.applyOptions({ width: container.clientWidth });
         window.addEventListener('resize', handleResize);
@@ -64,10 +80,20 @@ export const PriceChart: React.FC<PriceChartProps> = ({ data, height = 300 }) =>
     }, [height]);
 
     useEffect(() => {
-        if (!seriesRef.current || !chartData.length) return;
-        seriesRef.current.setData(chartData);
+        if (!series1Ref.current || !chartData1.length) return;
+        series1Ref.current.setData(chartData1);
         chartRef.current?.timeScale().fitContent();
-    }, [chartData]);
+    }, [chartData1]);
+
+    useEffect(() => {
+        if (!series2Ref.current) return;
+        
+        if (showData2 && chartData2.length) {
+            series2Ref.current.setData(chartData2);
+        } else {
+            series2Ref.current.setData([]);
+        }
+    }, [chartData2, showData2]);
 
     return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
 };
