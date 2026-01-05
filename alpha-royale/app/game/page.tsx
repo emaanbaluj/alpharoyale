@@ -5,12 +5,13 @@ export default function GamePage() {
   const [symbol, setSymbol] = useState('BTC');
   const [amount, setAmount] = useState('');
   const [orderType, setOrderType] = useState('buy');
+  const [gameID, setGameID] = useState<string>('A1B2C3')
 
   return (
     <div className="h-screen bg-gray-900 p-6">
       <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-center mb-6 text-white">
-          <h1 className="text-2xl font-bold">Alpha Royale - Trading Game</h1>
+          <h1 className="text-2xl font-bold">Alpha Royale - {gameID}</h1>
           <div className="flex gap-4">
             <div>Your Balance: $10,000</div>
             <div>Opponent Balance: $10,000</div>
