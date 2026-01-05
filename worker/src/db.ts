@@ -334,11 +334,13 @@ export async function updatePositionInDB(
   supabase: SupabaseClient,
   positionId: string,
   status?: string,
-  currentPrice?: number
+  currentPrice?: number,
+  unrealizedPnl?: number
 ): Promise<void> {
   const updates: any = {};
   if (status !== undefined) updates.status = status;
   if (currentPrice !== undefined) updates.current_price = currentPrice;
+  if (unrealizedPnl !== undefined) updates.unrealized_pnl = unrealizedPnl;
   updates.updated_at = new Date().toISOString();
 
   const { error } = await supabase

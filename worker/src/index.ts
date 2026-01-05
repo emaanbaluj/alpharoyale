@@ -2,17 +2,10 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { ScheduledController } from "@cloudflare/workers-types";
 import { fetchPriceDataFromFinnhub } from "./finnhub";
 import * as db from "./db";
-import type { PriceDataRow } from "./types";
 
 // Fetcher type for service bindings
 interface Fetcher {
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
-}
-
-// ExportedHandler type for Cloudflare Workers
-interface ExportedHandler<Env = any> {
-  fetch?(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response>;
-  scheduled?(controller: ScheduledController, env: Env, ctx: ExecutionContext): void | Promise<void>;
 }
 
 // Environment interface for main worker
@@ -109,7 +102,6 @@ async function scheduledHandler(
     }
     
     console.log(`Initiated processing for ${activeGames.length} games (running asynchronously)`);
-    
     console.log(`Game tick completed for game state ${nextGameState} at ${new Date(controller.scheduledTime).toISOString()}`);
   } catch (error) {
     console.error('Error in scheduled handler:', error);

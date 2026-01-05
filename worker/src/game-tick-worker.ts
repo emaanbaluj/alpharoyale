@@ -53,31 +53,11 @@ export default {
         // Initialize Supabase client
         const supabase = createSupabaseClient(env);
 
-        // Fetch price data for this game state from DB
-        // Each game worker fetches its own price data - allows for parallel fetching
-        const symbols = ['BTC', 'ETH']; // Tracked symbols - could be configurable per game
-        const priceData = await db.fetchPriceDataFromDB(supabase, symbols, 1);
-        
-        // Filter to only prices for this specific game state
-        const gameStatePriceData = priceData.filter(
-          (row) => row.game_state === body.gameState
-        );
-        
-        if (gameStatePriceData.length === 0) {
-          return new Response(
-            JSON.stringify({ error: `No price data found for game state ${body.gameState}` }),
-            {
-              status: 404,
-              headers: { 'Content-Type': 'application/json' },
-            }
-          );
-        }
-
         // Process game tick
+        // processGameTick will fetch its own price data as needed
         await processGameTick(
           body.gameId,
           body.gameState,
-          gameStatePriceData,
           supabase
         );
 
