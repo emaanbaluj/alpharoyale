@@ -1,20 +1,105 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { supabase } from '../auth/supabaseClient/supabaseClient';
+import { orderAPI, positionAPI, gameAPI } from '../lib/api';
+import { subscribeToGamePlayers, subscribeToPositions } from '../lib/subscriptions';
+
+interface Position {
+  id: string;
+  symbol: string;
+  side: string;
+  quantity: number;
+  entry_price: number;
+  current_price: number;
+  unrealized_pnl: number;
+}
 
 export default function GamePage() {
+  const searchParams = useSearchParams();
+  const gameId = searchParams.get('id');
+
   const [symbol, setSymbol] = useState('BTC');
   const [amount, setAmount] = useState('');
   const [orderType, setOrderType] = useState('buy');
-  const [gameID, setGameID] = useState<string>('A1B2C3')
+  const [userId, setUserId] = useState<string | null>(null);
+  const [myBalance, setMyBalance] = useState(10000);
+  const [opponentBalance, setOpponentBalance] = useState(10000);
+  const [positions, setPositions] = useState<Position[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        setUserId(user.id);
+        if (gameId) {
+          loadGameData(gameId, user.id);
+        }
+      }
+    });
+  }, [gameId]);
+
+  useEffect(() => {
+    if (!gameId || !userId) return;
+
+    const unsubPlayers = subscribeToGamePlayers(gameId, (payload) => {
+      loadGameData(gameId, userId);
+    });
+
+    const unsubPositions = subscribeToPositions(gameId, userId, (payload) => {
+      loadPositions(gameId, userId);
+    });
+
+    return () => {
+      unsubPlayers();
+      unsubPositions();
+    };
+  }, [gameId, userId]);
+
+  async function loadGameData(gId: string, uId: string) {
+    const { game, players } = await gameAPI.getGame(gId);
+    if (players) {
+      const me = players.find((p: any) => p.user_id === uId);
+      const opponent = players.find((p: any) => p.user_id !== uId);
+      if (me) setMyBalance(me.equity);
+      if (opponent) setOpponentBalance(opponent.equity);
+    }
+    loadPositions(gId, uId);
+  }
+
+  async function loadPositions(gId: string, uId: string) {
+    const { positions: pos } = await positionAPI.getPositions(gId, uId);
+    if (pos) setPositions(pos);
+  }
+
+  async function handlePlaceOrder() {
+    if (!gameId || !userId || !amount) return;
+    setLoading(true);
+    const result = await orderAPI.placeOrder({
+      gameId,
+      playerId: userId,
+      symbol,
+      orderType: 'MARKET',
+      side: orderType.toUpperCase(),
+      quantity: parseFloat(amount)
+    });
+    setLoading(false);
+    if (result.order) {
+      setAmount('');
+      alert('Order placed! Waiting for execution...');
+    } else {
+      alert('Failed to place order: ' + result.error);
+    }
+  }
 
   return (
     <div className="h-screen bg-gray-900 p-6">
       <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-center mb-6 text-white">
-          <h1 className="text-2xl font-bold">Alpha Royale - {gameID}</h1>
+          <h1 className="text-2xl font-bold">Alpha Royale - {gameId || 'Loading...'}</h1>
           <div className="flex gap-4">
-            <div>Your Balance: $10,000</div>
-            <div>Opponent Balance: $10,000</div>
+            <div>Your Balance: ${myBalance.toFixed(2)}</div>
+            <div>Opponent Balance: ${opponentBalance.toFixed(2)}</div>
           </div>
         </div>
 
@@ -67,7 +152,7 @@ export default function GamePage() {
               </select>
               <input 
                 type="number"
-                placeholder="Amount"
+                placeholder="Quantity"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 className="w-full p-2 bg-gray-900 border border-gray-700 text-white mb-2"
@@ -86,12 +171,40 @@ export default function GamePage() {
                   Sell
                 </button>
               </div>
-              <button className="w-full p-2 bg-blue-600 text-white">Submit Order</button>
+              <button 
+                className="w-full p-2 bg-blue-600 text-white disabled:opacity-50"
+                onClick={handlePlaceOrder}
+                disabled={loading || !amount}
+              >
+                {loading ? 'Placing...' : 'Submit Order'}
+              </button>
             </div>
 
             <div className="border border-gray-700 bg-gray-800 p-4">
               <h3 className="font-bold mb-3 text-white">Your Positions</h3>
-              <div className="text-sm text-gray-500">No open positions</div>
+              {positions.length === 0 ? (
+                <div className="text-sm text-gray-500">No open positions</div>
+              ) : (
+                <div className="space-y-2">
+                  {positions.map((pos) => (
+                    <div key={pos.id} className="p-2 bg-gray-900 rounded text-sm">
+                      <div className="flex justify-between text-white">
+                        <span className="font-bold">{pos.symbol}</span>
+                        <span className={pos.side === 'BUY' ? 'text-green-400' : 'text-red-400'}>
+                          {pos.side}
+                        </span>
+                      </div>
+                      <div className="text-gray-400">
+                        <div>Qty: {pos.quantity}</div>
+                        <div>Entry: ${pos.entry_price}</div>
+                        <div className={pos.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
+                          P&L: ${pos.unrealized_pnl?.toFixed(2) || '0.00'}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
