@@ -5,6 +5,7 @@
     "dev": "wrangler dev -c wrangler.toml -c wrangler-game-tick.toml",
     "dev:main": "wrangler dev",
     "dev:game-tick": "wrangler dev --config wrangler-game-tick.toml",
+    "dev:all": "echo 'Starting both workers...' && wrangler dev -c wrangler.toml -c wrangler-game-tick.toml",
     "deploy:main": "wrangler deploy",
     "deploy:game-tick": "wrangler deploy --config wrangler-game-tick.toml",
     "deploy:all": "npm run deploy:game-tick && npm run deploy:main"
