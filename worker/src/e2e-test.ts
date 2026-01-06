@@ -266,7 +266,8 @@ export async function testFullCronFlow(): Promise<boolean> {
       supabase,
       TEST_USERS[0].id,
       TEST_USERS[1].id,
-      10000.0
+      10000.0,
+      60 // durationMinutes
     );
     await db.updateGameStatusInDB(supabase, game.id, "active");
 
@@ -394,7 +395,8 @@ export async function testMultipleGamesParallel(): Promise<boolean> {
         supabase,
         TEST_USERS[0].id,
         TEST_USERS[1].id,
-        10000.0
+        10000.0,
+        60 // durationMinutes
       );
       await db.updateGameStatusInDB(supabase, game.id, "active");
       await db.insertGamePlayerInDB(supabase, game.id, TEST_USERS[0].id, 10000.0);

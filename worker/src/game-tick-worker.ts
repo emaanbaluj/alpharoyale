@@ -53,6 +53,24 @@ export default {
         // Initialize Supabase client
         const supabase = createSupabaseClient(env);
 
+        // Check if game has expired before processing
+        const wasExpired = await db.checkAndCompleteGameIfExpired(supabase, body.gameId);
+        if (wasExpired) {
+          console.log(`Game ${body.gameId} expired and marked as completed, skipping tick processing`);
+          return new Response(
+            JSON.stringify({ 
+              success: true,
+              gameId: body.gameId,
+              gameState: body.gameState,
+              expired: true,
+            }),
+            {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            }
+          );
+        }
+
         // Process game tick
         // processGameTick will fetch its own price data as needed
         await processGameTick(

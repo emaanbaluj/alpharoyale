@@ -142,7 +142,8 @@ export async function insertGameInDB(
   supabase: SupabaseClient,
   player1Id: string,
   player2Id: string | null = null,
-  initialBalance = 10000.0
+  initialBalance = 10000.0,
+  durationMinutes = 60
 ): Promise<GameRow> {
   const { data, error } = await supabase
     .from("games")
@@ -150,6 +151,7 @@ export async function insertGameInDB(
       player1_id: player1Id,
       player2_id: player2Id,
       initial_balance: initialBalance,
+      duration_minutes: durationMinutes,
     })
     .select()
     .single();
@@ -178,13 +180,97 @@ export async function updateGameStatusInDB(
     updated_at: new Date().toISOString(),
   };
 
-  if (status === "completed" && winnerId) {
-    updateData.winner_id = winnerId;
+  // Set started_at when game becomes active (if not already set)
+  if (status === "active") {
+    const games = await fetchGamesFromDB(supabase);
+    const currentGame = games.find((g) => g.id === gameId);
+    if (currentGame && !currentGame.started_at) {
+      updateData.started_at = new Date().toISOString();
+    }
+  }
+
+  // Set ended_at and optionally winner_id when game is completed
+  if (status === "completed") {
     updateData.ended_at = new Date().toISOString();
+    if (winnerId) {
+      updateData.winner_id = winnerId;
+    }
   }
 
   const { error } = await supabase.from("games").update(updateData).eq("id", gameId);
   if (error) throw new Error(`Supabase error: ${error.message}`);
+}
+
+/**
+ * Check if a single game has expired and complete it if so
+ * Returns true if the game was expired and completed, false otherwise
+ */
+export async function checkAndCompleteGameIfExpired(
+  supabase: SupabaseClient,
+  gameId: string
+): Promise<boolean> {
+  // Fetch the specific game
+  const games = await fetchGamesFromDB(supabase);
+  const game = games.find((g) => g.id === gameId);
+
+  if (!game) {
+    return false; // Game not found
+  }
+
+  // Only check active games that have started
+  if (game.status !== "active" || !game.started_at) {
+    return false; // Game not active or hasn't started
+  }
+
+  // Calculate expiration time
+  const startedAt = new Date(game.started_at);
+  const expirationTime = new Date(startedAt);
+  expirationTime.setMinutes(expirationTime.getMinutes() + game.duration_minutes);
+
+  // Check if game has expired
+  const now = new Date();
+  if (now >= expirationTime) {
+    // Mark game as completed
+    await updateGameStatusInDB(supabase, game.id, "completed");
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Check and complete expired games based on duration (batch operation)
+ * Returns list of game IDs that were completed
+ * @deprecated Use checkAndCompleteGameIfExpired in bound worker instead
+ */
+export async function checkAndCompleteExpiredGames(
+  supabase: SupabaseClient
+): Promise<string[]> {
+  // Fetch all active games that have started
+  const activeGames = await fetchGamesFromDB(supabase, "active");
+  const now = new Date();
+  const expiredGameIds: string[] = [];
+
+  for (const game of activeGames) {
+    // Skip games that haven't started yet (started_at is NULL)
+    if (!game.started_at) {
+      continue;
+    }
+
+    // Calculate expiration time
+    const startedAt = new Date(game.started_at);
+    const expirationTime = new Date(startedAt);
+    expirationTime.setMinutes(expirationTime.getMinutes() + game.duration_minutes);
+
+    // Check if game has expired
+    if (now >= expirationTime) {
+      // Mark game as completed
+      await updateGameStatusInDB(supabase, game.id, "completed");
+      expiredGameIds.push(game.id);
+    }
+  }
+
+  return expiredGameIds;
 }
 
 // --------------------

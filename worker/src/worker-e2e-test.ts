@@ -170,7 +170,7 @@ async function testScheduledHandlerFlow(): Promise<boolean> {
 
     // Create a test game with a pending order
     console.log("📋 Setting up test game...");
-    const game = await db.insertGameInDB(supabase, TEST_USERS[0].id, TEST_USERS[1].id, 10000.0);
+    const game = await db.insertGameInDB(supabase, TEST_USERS[0].id, TEST_USERS[1].id, 10000.0, 60);
     await db.updateGameStatusInDB(supabase, game.id, "active");
     await db.insertGamePlayerInDB(supabase, game.id, TEST_USERS[0].id, 10000.0);
 
@@ -293,34 +293,113 @@ async function testScheduledHandlerFlow(): Promise<boolean> {
 }
 
 /**
- * Test 3: Service binding via main worker
+ * Test 3: Game expiration timeout
+ * Tests that expired games are marked as completed and skip tick processing
  */
-async function testServiceBinding(): Promise<boolean> {
-  console.log("\n🧪 Test 3: Service Binding Test\n");
+async function testGameExpiration(): Promise<boolean> {
+  console.log("\n🧪 Test 3: Game Expiration Test\n");
+
+  const supabase = getSupabase();
 
   try {
-    // Test the service binding endpoint
-    console.log(`🚀 Testing service binding through main worker...`);
-    const response = await fetch(`${MAIN_WORKER_URL}/test-service-binding`, {
-      method: 'POST',
+    // Ensure test users are initialized
+    if (!TEST_USERS || TEST_USERS.length === 0) {
+      TEST_USERS = await createTestUsers(supabase);
+      if (TEST_USERS.length < 2) {
+        throw new Error(`Expected 2 test users, but only ${TEST_USERS.length} were created`);
+      }
+    }
+
+    console.log("📋 Setting up expired game...");
+    
+    // Create a game with a very short duration (1 minute)
+    const game = await db.insertGameInDB(
+      supabase,
+      TEST_USERS[0].id,
+      TEST_USERS[1].id,
+      10000.0,
+      1 // 1 minute duration
+    );
+    await db.insertGamePlayerInDB(supabase, game.id, TEST_USERS[0].id, 10000.0);
+    await db.insertGamePlayerInDB(supabase, game.id, TEST_USERS[1].id, 10000.0);
+    
+    // Start the game
+    await db.updateGameStatusInDB(supabase, game.id, "active");
+    
+    // Manually set started_at to 2 minutes ago (expired)
+    const expiredStartedAt = new Date();
+    expiredStartedAt.setMinutes(expiredStartedAt.getMinutes() - 2); // 2 minutes ago (past 1 minute duration)
+    
+    await supabase
+      .from("games")
+      .update({ started_at: expiredStartedAt.toISOString() })
+      .eq("id", game.id);
+    
+    console.log(`✅ Created expired game: ${game.id}`);
+    console.log(`   Started at: ${expiredStartedAt.toISOString()}`);
+    console.log(`   Duration: 1 minute`);
+    console.log(`   Should be expired: Yes\n`);
+    
+    // Verify game is expired before triggering scheduled handler
+    console.log("🔍 Verifying game is expired...");
+    const beforeGames = await db.fetchGamesFromDB(supabase);
+    const beforeGame = beforeGames.find(g => g.id === game.id);
+    
+    if (!beforeGame || beforeGame.status !== 'active') {
+      console.error(`❌ Game should be active before tick: ${beforeGame?.status}`);
+      return false;
+    }
+    console.log(`✅ Game is active before tick processing\n`);
+    
+    // Trigger scheduled handler - should process the expired game and mark it as completed
+    console.log("🚀 Triggering scheduled handler...");
+    const response = await fetch(`${MAIN_WORKER_URL}/cdn-cgi/handler/scheduled`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(30000), // 30 second timeout
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`❌ Service binding test failed: ${response.status} - ${errorText}`);
+      console.error(`❌ Scheduled handler failed: ${response.status} - ${errorText}`);
       return false;
     }
 
-    const result = await response.json();
+    console.log(`✅ Scheduled handler executed successfully\n`);
     
-    if (!result.serviceBindingWorking) {
-      console.error(`❌ Service binding not working:`, result.error);
+    // Wait a bit for async processing to complete
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Verify game was marked as completed
+    console.log("🔍 Verifying game was marked as completed...");
+    const afterGames = await db.fetchGamesFromDB(supabase);
+    const afterGame = afterGames.find(g => g.id === game.id);
+    
+    if (!afterGame) {
+      console.error(`❌ Game not found after tick`);
       return false;
     }
-
-    console.log(`✅ Service binding is working`);
-    console.log(`   Game-tick worker response:`, result.gameTickWorkerResponse);
     
+    if (afterGame.status !== 'completed') {
+      console.error(`❌ Game should be completed but status is: ${afterGame.status}`);
+      console.error(`   started_at: ${afterGame.started_at}`);
+      console.error(`   ended_at: ${afterGame.ended_at}`);
+      console.error(`   duration_minutes: ${afterGame.duration_minutes}`);
+      return false;
+    }
+    
+    if (!afterGame.ended_at) {
+      console.error(`❌ Game should have ended_at set`);
+      return false;
+    }
+    
+    console.log(`✅ Game correctly marked as completed`);
+    console.log(`   Status: ${afterGame.status}`);
+    console.log(`   Ended at: ${new Date(afterGame.ended_at).toISOString()}\n`);
+    
+    // Cleanup
+    await supabase.from("games").delete().eq("id", game.id);
+    
+    console.log("✅ Game expiration test passed!");
     return true;
   } catch (error) {
     console.error(`❌ Test failed:`, error);
@@ -408,12 +487,12 @@ async function runAllWorkerE2ETests(): Promise<void> {
   const results = {
     health: false,
     scheduled: false,
-    serviceBinding: false,
+    gameExpiration: false,
   };
 
   results.health = await testWorkerHealth();
   results.scheduled = await testScheduledHandlerFlow();
-  results.serviceBinding = await testServiceBinding();
+  results.gameExpiration = await testGameExpiration();
 
   // Summary
   console.log("\n" + "=".repeat(50));
@@ -421,7 +500,7 @@ async function runAllWorkerE2ETests(): Promise<void> {
   console.log("=".repeat(50));
   console.log(`Health Check:        ${results.health ? "✅ PASS" : "❌ FAIL"}`);
   console.log(`Scheduled Handler:   ${results.scheduled ? "✅ PASS" : "❌ FAIL"}`);
-  console.log(`Service Binding:     ${results.serviceBinding ? "✅ PASS" : "❌ FAIL"}`);
+  console.log(`Game Expiration:     ${results.gameExpiration ? "✅ PASS" : "❌ FAIL"}`);
   console.log("=".repeat(50));
 
   const allPassed = Object.values(results).every(r => r);
