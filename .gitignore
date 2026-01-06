@@ -1,0 +1,16 @@
+# Root level - NO packages should be here
+/node_modules/
+/package.json
+/package-lock.json
+
+# macOS
+.DS_Store
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
