@@ -61,37 +61,14 @@ export default function GamePage() {
     setOppEquityChartData(prev => [...prev, ...oppNewEntries]);
   };
 
-  // tejas: i chatgpt generated this to fabricate data so we can test
-  // it generates a data point every 20 seconds -----------------------
-  const generateTickerData = (ticker: CompatibleTickers): TickerPriceData => {
-    const points: ChartUnit[] = [];
-    const startTime = new Date();
-    const basePrices = { ETH: 2500, BTC: 65000, AAPL: 190 };
-    let currentPrice = basePrices[ticker];
-    for (let i = 0; i < 360; i++) {
-      const time = new Date(startTime.getTime() - i * 20000);
-      const variance = currentPrice * (Math.random() * 0.001 - 0.0005);
-      currentPrice += variance;
-
-      points.push({
-        time: time.toISOString(),
-        value: parseFloat(currentPrice.toFixed(2))
-      });
-    }
-
-    return {
-      ticker,
-      price: points.reverse()
-    };
-  };
   useEffect(() => {
-    const initialData: Record<string, TickerPriceData> = {};
-    COMPATIBLETICKERS.forEach(ticker => {
-      initialData[ticker] = generateTickerData(ticker);
-    });
-    setMarketData(initialData);
+    async function loadMarketData() {
+      const res = await fetch('/api/equity-data/get');
+      const json = await res.json();
+      setMarketData(json.marketData);
+    }
+    loadMarketData();
   }, []);
-  // ------------------------------------------------------------------
 
   // tejas: fake data for equity chart for testing --------------------
   useEffect(() => {
