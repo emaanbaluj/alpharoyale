@@ -250,6 +250,9 @@ export async function updatePositionInDB(
     status?: string;
     currentPrice?: number;
     unrealizedPnl?: number;
+    quantity?: number;
+    entryPrice?: number;
+
   }
 ): Promise<void> {
   const payload: any = {
@@ -259,6 +262,8 @@ export async function updatePositionInDB(
   if (updates.status !== undefined) payload.status = updates.status;
   if (updates.currentPrice !== undefined) payload.current_price = updates.currentPrice;
   if (updates.unrealizedPnl !== undefined) payload.unrealized_pnl = updates.unrealizedPnl;
+  if (updates.quantity !== undefined) payload.quantity = updates.quantity;
+  if (updates.entryPrice !== undefined) payload.entry_price = updates.entryPrice;
 
   const { error } = await supabase
     .from("positions")
