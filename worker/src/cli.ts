@@ -65,10 +65,37 @@ async function showGameStatus(supabase: SupabaseClient, gameId: string): Promise
     const orders = await db.fetchOrdersFromDB(supabase, gameId);
     const gameState = await db.fetchGameStateFromDB(supabase);
 
-    console.log(`\n📊 Game Status: ${gameId}\n`);
-    console.log(`Status: ${game.status}`);
-    console.log(`Current Tick: ${gameState?.current_tick || 0}`);
-    console.log(`Created: ${new Date(game.created_at).toLocaleString()}`);
+  console.log(`\n📊 Game Status: ${gameId}\n`);
+  console.log(`Status: ${game.status}`);
+  console.log(`Current Tick: ${gameState?.current_tick || 0}`);
+  console.log(`Created: ${new Date(game.created_at).toLocaleString()}`);
+  
+  // Display duration and timing information
+  console.log(`Duration: ${game.duration_minutes} minutes`);
+  if (game.started_at) {
+    const startedAt = new Date(game.started_at);
+    const expirationTime = new Date(startedAt);
+    expirationTime.setMinutes(expirationTime.getMinutes() + game.duration_minutes);
+    const now = new Date();
+    const remainingMs = expirationTime.getTime() - now.getTime();
+    
+    console.log(`Started: ${startedAt.toLocaleString()}`);
+    console.log(`Ends: ${expirationTime.toLocaleString()}`);
+    
+    if (remainingMs > 0) {
+      const remainingMinutes = Math.floor(remainingMs / 60000);
+      const remainingSeconds = Math.floor((remainingMs % 60000) / 1000);
+      console.log(`Remaining: ${remainingMinutes}m ${remainingSeconds}s`);
+    } else if (game.status === "active") {
+      console.log(`⚠️  Game has expired but may not have been processed yet`);
+    }
+  } else {
+    console.log(`Started: Not started yet (waiting for players)`);
+  }
+  
+  if (game.ended_at) {
+    console.log(`Ended: ${new Date(game.ended_at).toLocaleString()}`);
+  }
     console.log("");
 
     console.log(`👥 Players (${players.length}):`);
@@ -372,6 +399,13 @@ async function createGameInteractive(supabase: SupabaseClient): Promise<void> {
         initial: 10000,
         validate: (value) => value > 0 || "Initial balance must be greater than 0",
       },
+      {
+        type: "number",
+        name: "durationMinutes",
+        message: "Game duration (minutes)",
+        initial: 60,
+        validate: (value) => value > 0 || "Duration must be greater than 0",
+      },
     ]);
 
     if (!response.player1Email) {
@@ -390,11 +424,18 @@ async function createGameInteractive(supabase: SupabaseClient): Promise<void> {
     }
 
     console.log("\n🎮 Creating game...");
-    const game = await db.insertGameInDB(supabase, player1Id, player2Id, response.initialBalance);
+    const game = await db.insertGameInDB(
+      supabase, 
+      player1Id, 
+      player2Id, 
+      response.initialBalance,
+      response.durationMinutes
+    );
     await db.updateGameStatusInDB(supabase, game.id, "active");
 
     console.log(`   ✅ Game created: ${game.id}`);
     console.log(`   Status: active`);
+    console.log(`   Duration: ${response.durationMinutes} minutes`);
     console.log(`   Initial balance: $${response.initialBalance}`);
 
     // Add players to the game

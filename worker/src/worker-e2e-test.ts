@@ -170,7 +170,7 @@ async function testScheduledHandlerFlow(): Promise<boolean> {
 
     // Create a test game with a pending order
     console.log("📋 Setting up test game...");
-    const game = await db.insertGameInDB(supabase, TEST_USERS[0].id, TEST_USERS[1].id, 10000.0);
+    const game = await db.insertGameInDB(supabase, TEST_USERS[0].id, TEST_USERS[1].id, 10000.0, 60);
     await db.updateGameStatusInDB(supabase, game.id, "active");
     await db.insertGamePlayerInDB(supabase, game.id, TEST_USERS[0].id, 10000.0);
 

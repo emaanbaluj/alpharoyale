@@ -160,6 +160,7 @@ export async function setupTestData(options?: {
   symbols?: string[];
   numGames?: number;
   playersPerGame?: number;
+  durationMinutes?: number;
 }): Promise<void> {
   console.log("🚀 Setting up test data...");
   
@@ -189,6 +190,7 @@ export async function setupTestData(options?: {
     const symbols = options?.symbols ?? TEST_SYMBOLS;
     const numGames = options?.numGames ?? 1;
     const playersPerGame = options?.playersPerGame ?? 2;
+    const durationMinutes = options?.durationMinutes ?? 60;
 
     // 3. Create test game(s)
     console.log(`🎮 Creating ${numGames} test game(s)...`);
@@ -200,7 +202,8 @@ export async function setupTestData(options?: {
         supabase,
         TEST_USERS[0].id,
         player2Id,
-        initialBalance
+        initialBalance,
+        durationMinutes
       );
       await db.updateGameStatusInDB(supabase, game.id, "active");
       games.push(game);
@@ -685,7 +688,7 @@ async function scenario_marketBuyCreatesPosition(): Promise<boolean> {
 
   try {
     // Setup: Create game and player
-    const game = await db.insertGameInDB(supabase, playerId, null, 10000.0);
+    const game = await db.insertGameInDB(supabase, playerId, null, 10000.0, 60);
     await db.updateGameStatusInDB(supabase, game.id, "active");
     await db.insertGamePlayerInDB(supabase, game.id, playerId, 10000.0);
 
@@ -752,7 +755,7 @@ async function scenario_marketSellRejected(): Promise<boolean> {
   const quantity = 1.0;
 
   try {
-    const game = await db.insertGameInDB(supabase, playerId, null, 10000.0);
+    const game = await db.insertGameInDB(supabase, playerId, null, 10000.0, 60);
     await db.updateGameStatusInDB(supabase, game.id, "active");
     await db.insertGamePlayerInDB(supabase, game.id, playerId, 10000.0);
 
@@ -808,7 +811,7 @@ async function scenario_takeProfitTriggers(): Promise<boolean> {
   const quantity = 0.2;
 
   try {
-    const game = await db.insertGameInDB(supabase, playerId, null, 10000.0);
+    const game = await db.insertGameInDB(supabase, playerId, null, 10000.0, 60);
     await db.updateGameStatusInDB(supabase, game.id, "active");
     await db.insertGamePlayerInDB(supabase, game.id, playerId, 10000.0);
 
@@ -876,7 +879,7 @@ async function scenario_stopLossTriggers(): Promise<boolean> {
   const quantity = 0.2;
 
   try {
-    const game = await db.insertGameInDB(supabase, playerId, null, 10000.0);
+    const game = await db.insertGameInDB(supabase, playerId, null, 10000.0, 60);
     await db.updateGameStatusInDB(supabase, game.id, "active");
     await db.insertGamePlayerInDB(supabase, game.id, playerId, 10000.0);
 
@@ -941,7 +944,7 @@ async function scenario_positionPnlCalculation(): Promise<boolean> {
   const quantity = 0.1;
 
   try {
-    const game = await db.insertGameInDB(supabase, playerId, null, 10000.0);
+    const game = await db.insertGameInDB(supabase, playerId, null, 10000.0, 60);
     await db.updateGameStatusInDB(supabase, game.id, "active");
     await db.insertGamePlayerInDB(supabase, game.id, playerId, 10000.0);
 
@@ -990,7 +993,7 @@ async function scenario_equityHistoryTracking(): Promise<boolean> {
   const playerId = TEST_USERS[0].id;
 
   try {
-    const game = await db.insertGameInDB(supabase, playerId, null, 10000.0);
+    const game = await db.insertGameInDB(supabase, playerId, null, 10000.0, 60);
     await db.updateGameStatusInDB(supabase, game.id, "active");
     await db.insertGamePlayerInDB(supabase, game.id, playerId, 10000.0);
 
@@ -1030,7 +1033,7 @@ async function scenario_extendedTrading(): Promise<boolean> {
   try {
     // Setup: Create game and player
     console.log("📋 Setting up extended trading scenario...");
-    const game = await db.insertGameInDB(supabase, playerId, null, initialBalance);
+    const game = await db.insertGameInDB(supabase, playerId, null, initialBalance, 60);
     await db.updateGameStatusInDB(supabase, game.id, "active");
     await db.insertGamePlayerInDB(supabase, game.id, playerId, initialBalance);
 

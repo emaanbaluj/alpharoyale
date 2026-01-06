@@ -75,16 +75,19 @@ async function scheduledHandler(
     console.log(`Incrementing game state from ${currentGameState} to ${nextGameState}`);
     await db.updateGameStateInDB(supabase, nextGameState);
     
-    // 5. Fetch active games
-    const activeGames = await db.fetchGamesFromDB(supabase, 'active');
-    console.log(`Found ${activeGames.length} active games`);
+    // 5. Fetch active games (only games that have started - started_at IS NOT NULL)
+    // Note: Expiration checking is now done in the bound worker for each game
+    const allActiveGames = await db.fetchGamesFromDB(supabase, 'active');
+    // Filter to only games that have actually started (exclude waiting games)
+    const activeGames = allActiveGames.filter(game => game.started_at !== null);
+    console.log(`Found ${activeGames.length} active games (${allActiveGames.length - activeGames.length} waiting)`);
     
     if (activeGames.length === 0) {
       console.log('No active games to process');
       return;
     }
     
-    // 6. Fire off game processing requests without waiting
+    // 7. Fire off game processing requests without waiting
     // Each game worker will fetch its own price data from the DB
     // Use ctx.waitUntil() to keep them running in background
     // This allows the main worker to complete quickly while games process asynchronously
