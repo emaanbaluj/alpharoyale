@@ -423,8 +423,8 @@ export async function testMultipleGamesParallel(): Promise<boolean> {
 
     const cronResult = await simulateScheduledHandler(mockPrices, mockGameTickWorker);
 
-    if (!cronResult.success || cronResult.processedGames !== games.length) {
-      console.error(`❌ Failed to process all games. Processed: ${cronResult.processedGames}/${games.length}`);
+    if (!cronResult.success) {
+      console.error(`❌ Cron handler failed. Processed: ${cronResult.processedGames} games`);
       if (cronResult.errors.length > 0) {
         console.error("Errors:", cronResult.errors);
       }
@@ -432,7 +432,8 @@ export async function testMultipleGamesParallel(): Promise<boolean> {
       return false;
     }
 
-    // Verify all games were processed
+    // Verify our test games were processed (note: may process more games if other tests left data)
+    const gameIds = new Set(games.map((g) => g.id));
     for (const game of games) {
       const orders = await db.fetchOrdersFromDB(supabase, game.id);
       const filledOrders = orders.filter((o) => o.status === "filled");
@@ -441,6 +442,13 @@ export async function testMultipleGamesParallel(): Promise<boolean> {
         await Promise.all(games.map((g) => cleanup(supabase, g.id)));
         return false;
       }
+    }
+    
+    // Verify at least our games were processed
+    if (cronResult.processedGames < games.length) {
+      console.error(`❌ Not all test games were processed. Processed: ${cronResult.processedGames}, Expected at least: ${games.length}`);
+      await Promise.all(games.map((g) => cleanup(supabase, g.id)));
+      return false;
     }
 
     console.log(`✅ All ${games.length} games processed successfully`);
