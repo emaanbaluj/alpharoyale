@@ -10,19 +10,19 @@ import type {
   OrderExecutionsRow,
 } from "./types";
 
-// Environment variables for Supabase
-export type Env = {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_ROLE_KEY: string;
-};
-
-export function getSupabase(env: Env): SupabaseClient {
-  return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
-}
 
 // --------------------
 // price_data
 // --------------------
+
+/**
+ * Fetch most recent price data rows for a symbol.
+ *
+ * @param supabase - Supabase client instance
+ * @param symbol - Asset symbol (e.g. BTC, ETH)
+ * @param limit - Maximum number of rows to return (default 200)
+ * @returns Array of price_data rows (most recent first)
+ */
 export async function fetchPriceDataFromDB(
   supabase: SupabaseClient,
   symbol: string,
@@ -39,6 +39,14 @@ export async function fetchPriceDataFromDB(
   return data ?? [];
 }
 
+/**
+ * Insert a new price row for a symbol at a given game state.
+ *
+ * @param supabase - Supabase client instance
+ * @param symbol - Asset symbol (e.g. BTC, ETH)
+ * @param price - Latest price to store
+ * @param gameState - Tick/game state number
+ */
 export async function insertPrice(
   supabase: SupabaseClient,
   symbol: string,
@@ -58,6 +66,13 @@ export async function insertPrice(
 // --------------------
 // game_state
 // --------------------
+
+/**
+ * Fetch the single-row game_state record (id=1).
+ *
+ * @param supabase - Supabase client instance
+ * @returns GameStateRow if exists, otherwise null
+ */
 export async function fetchGameStateFromDB(
   supabase: SupabaseClient
 ): Promise<GameStateRow | null> {
@@ -71,6 +86,12 @@ export async function fetchGameStateFromDB(
   return data ?? null;
 }
 
+/**
+ * Upsert the single-row game_state record (id=1) with a new current tick.
+ *
+ * @param supabase - Supabase client instance
+ * @param currentTick - New current tick to store
+ */
 export async function updateGameStateInDB(
   supabase: SupabaseClient,
   currentTick: number
@@ -88,6 +109,14 @@ export async function updateGameStateInDB(
 // --------------------
 // games
 // --------------------
+
+/**
+ * Fetch games, optionally filtered by status.
+ *
+ * @param supabase - Supabase client instance
+ * @param status - Optional game status filter (e.g. "active", "completed")
+ * @returns Array of games (most recently created first)
+ */
 export async function fetchGamesFromDB(
   supabase: SupabaseClient,
   status?: string
@@ -100,6 +129,15 @@ export async function fetchGamesFromDB(
   return data ?? [];
 }
 
+/**
+ * Create a new game row.
+ *
+ * @param supabase - Supabase client instance
+ * @param player1Id - User ID for player 1
+ * @param player2Id - Optional user ID for player 2
+ * @param initialBalance - Starting balance for players (default 10000)
+ * @returns The inserted game row
+ */
 export async function insertGameInDB(
   supabase: SupabaseClient,
   player1Id: string,
@@ -120,6 +158,15 @@ export async function insertGameInDB(
   return data as GameRow;
 }
 
+/**
+ * Update the status of a game.
+ * If status is "completed" and winnerId is provided, also sets winner_id + ended_at.
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID to update
+ * @param status - New status value
+ * @param winnerId - Optional winner user ID (only used when status="completed")
+ */
 export async function updateGameStatusInDB(
   supabase: SupabaseClient,
   gameId: string,
@@ -143,6 +190,15 @@ export async function updateGameStatusInDB(
 // --------------------
 // game_players
 // --------------------
+
+/**
+ * Fetch game_players rows, optionally filtered by gameId and/or userId.
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Optional game ID filter
+ * @param userId - Optional user ID filter
+ * @returns Array of game_players rows
+ */
 export async function fetchGamePlayersFromDB(
   supabase: SupabaseClient,
   gameId?: string,
@@ -157,6 +213,15 @@ export async function fetchGamePlayersFromDB(
   return (data ?? []) as GamePlayerRow[];
 }
 
+/**
+ * Insert a new game_players row for a user in a game.
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID
+ * @param userId - User ID
+ * @param initialBalance - Starting balance/equity (default 10000)
+ * @returns Inserted game_players row
+ */
 export async function insertGamePlayerInDB(
   supabase: SupabaseClient,
   gameId: string,
@@ -178,6 +243,15 @@ export async function insertGamePlayerInDB(
   return data as GamePlayerRow;
 }
 
+/**
+ * Update a player's balance and equity in game_players.
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID
+ * @param userId - Player user ID
+ * @param newBalance - New cash balance
+ * @param newEquity - New equity value
+ */
 export async function updateGamePlayerBalanceInDB(
   supabase: SupabaseClient,
   gameId: string,
@@ -201,6 +275,15 @@ export async function updateGamePlayerBalanceInDB(
 // --------------------
 // positions
 // --------------------
+
+/**
+ * Fetch positions rows, optionally filtered by gameId and/or status.
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Optional game ID filter
+ * @param status - Optional status filter (e.g. "open", "closed")
+ * @returns Array of positions rows
+ */
 export async function fetchPositionsFromDB(
   supabase: SupabaseClient,
   gameId?: string,
@@ -215,6 +298,19 @@ export async function fetchPositionsFromDB(
   return (data ?? []) as PositionRow[];
 }
 
+/**
+ * Insert a new position.
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID
+ * @param playerId - Player user ID
+ * @param symbol - Asset symbol
+ * @param side - "BUY" or "SELL" (v1 is long-only but schema supports both)
+ * @param quantity - Position quantity
+ * @param entryPrice - Entry price for the position
+ * @param leverage - Leverage (default 1)
+ * @returns Inserted position row
+ */
 export async function insertPositionInDB(
   supabase: SupabaseClient,
   gameId: string,
@@ -243,6 +339,13 @@ export async function insertPositionInDB(
   return data as PositionRow;
 }
 
+/**
+ * Update a position with any subset of supported fields.
+ *
+ * @param supabase - Supabase client instance
+ * @param positionId - Position ID to update
+ * @param updates - Patch object of fields to update
+ */
 export async function updatePositionInDB(
   supabase: SupabaseClient,
   positionId: string,
@@ -252,7 +355,6 @@ export async function updatePositionInDB(
     unrealizedPnl?: number;
     quantity?: number;
     entryPrice?: number;
-
   }
 ): Promise<void> {
   const payload: any = {
@@ -262,27 +364,33 @@ export async function updatePositionInDB(
   if (updates.status !== undefined) payload.status = updates.status;
   if (updates.currentPrice !== undefined) payload.current_price = updates.currentPrice;
   if (updates.unrealizedPnl !== undefined) payload.unrealized_pnl = updates.unrealizedPnl;
+
+  // new fields
   if (updates.quantity !== undefined) payload.quantity = updates.quantity;
   if (updates.entryPrice !== undefined) payload.entry_price = updates.entryPrice;
 
-  const { error } = await supabase
-    .from("positions")
-    .update(payload)
-    .eq("id", positionId);
-
-  if (error) {
-    throw new Error(`Supabase error: ${error.message}`);
-  }
+  const { error } = await supabase.from("positions").update(payload).eq("id", positionId);
+  if (error) throw new Error(`Supabase error: ${error.message}`);
 }
 
 // --------------------
 // orders
 // --------------------
+
+/**
+ * Fetch orders for a game, optionally filtered by status and orderType.
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID (required)
+ * @param status - Optional status filter (e.g. "pending", "filled", "rejected")
+ * @param orderType - Optional order type filter (e.g. "MARKET", "TAKE_PROFIT", "STOP_LOSS")
+ * @returns Array of orders rows
+ */
 export async function fetchOrdersFromDB(
   supabase: SupabaseClient,
   gameId: string,
   status?: string,
-  orderType?: string,
+  orderType?: string
 ): Promise<OrderRow[]> {
   let query = supabase.from("orders").select("*");
   if (gameId) query = query.eq("game_id", gameId);
@@ -294,6 +402,21 @@ export async function fetchOrdersFromDB(
   return (data ?? []) as OrderRow[];
 }
 
+/**
+ * Insert a new order (MARKET / TAKE_PROFIT / STOP_LOSS, etc.).
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID
+ * @param playerId - Player user ID
+ * @param symbol - Asset symbol
+ * @param orderType - Order type string
+ * @param side - "BUY" or "SELL"
+ * @param quantity - Order quantity
+ * @param price - Optional limit price (if used)
+ * @param triggerPrice - Optional trigger price (for TP/SL)
+ * @param positionId - Optional linked position ID (for TP/SL)
+ * @returns Inserted order row
+ */
 export async function insertOrderInDB(
   supabase: SupabaseClient,
   gameId: string,
@@ -326,6 +449,14 @@ export async function insertOrderInDB(
   return data as OrderRow;
 }
 
+/**
+ * Update an order status, and optionally mark it filled with a filled_price + filled_at.
+ *
+ * @param supabase - Supabase client instance
+ * @param orderId - Order ID
+ * @param status - New status string (e.g. "pending", "filled", "rejected")
+ * @param filledPrice - Optional filled price; if present, also sets filled_at
+ */
 export async function updateOrderInDB(
   supabase: SupabaseClient,
   orderId: string,
@@ -344,11 +475,19 @@ export async function updateOrderInDB(
   if (error) throw new Error(`Supabase error: ${error.message}`);
 }
 
-// NOTE: Removed executeOrderInDB because updateOrderInDB already handles filling.
-
 // --------------------
 // order_executions
 // --------------------
+
+/**
+ * Fetch order executions, optionally filtered by orderId/gameId/playerId.
+ *
+ * @param supabase - Supabase client instance
+ * @param orderId - Optional order ID filter
+ * @param gameId - Optional game ID filter
+ * @param playerId - Optional player ID filter
+ * @returns Array of order_executions rows
+ */
 export async function fetchOrderExecutionsFromDB(
   supabase: SupabaseClient,
   orderId?: string,
@@ -365,6 +504,19 @@ export async function fetchOrderExecutionsFromDB(
   return (data ?? []) as OrderExecutionsRow[];
 }
 
+/**
+ * Insert a new execution row (audit trail for fills).
+ *
+ * @param supabase - Supabase client instance
+ * @param orderId - Order ID
+ * @param gameId - Game ID
+ * @param playerId - Player user ID
+ * @param symbol - Asset symbol
+ * @param side - "BUY" or "SELL"
+ * @param quantity - Filled quantity
+ * @param executionPrice - Fill price
+ * @param gameState - Tick/game state number
+ */
 export async function insertOrderExecutionInDB(
   supabase: SupabaseClient,
   orderId: string,
@@ -393,6 +545,15 @@ export async function insertOrderExecutionInDB(
 // --------------------
 // equity_history
 // --------------------
+
+/**
+ * Fetch equity history rows, optionally filtered by gameId and/or playerId.
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Optional game ID filter
+ * @param playerId - Optional player ID filter
+ * @returns Array of equity_history rows
+ */
 export async function fetchEquityHistoryFromDB(
   supabase: SupabaseClient,
   gameId?: string,
@@ -407,6 +568,16 @@ export async function fetchEquityHistoryFromDB(
   return (data ?? []) as EquityHistoryRow[];
 }
 
+/**
+ * Insert a new equity history row (for charts).
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID
+ * @param playerId - Player user ID
+ * @param gameState - Tick/game state number
+ * @param balance - Player cash balance at this tick
+ * @param equity - Player equity at this tick
+ */
 export async function insertEquityHistoryInDB(
   supabase: SupabaseClient,
   gameId: string,
@@ -425,4 +596,3 @@ export async function insertEquityHistoryInDB(
 
   if (error) throw new Error(error.message);
 }
-
