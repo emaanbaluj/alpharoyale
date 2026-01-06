@@ -13,22 +13,17 @@ export async function POST(request: Request) {
 
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  const { data: order, error } = await supabase
-    .from('orders')
-    .insert({
-      game_id: gameId,
-      player_id: playerId,
-      symbol,
-      order_type: orderType,
-      side,
-      quantity,
-      price: price || null,
-      trigger_price: triggerPrice || null,
-      position_id: positionId || null,
-      status: 'pending'
-    })
-    .select()
-    .single();
+  const { data: order, error } = await supabase.rpc('place_order', {
+    p_game_id: gameId,
+    p_player_id: playerId,
+    p_symbol: symbol,
+    p_order_type: orderType,
+    p_side: side,
+    p_quantity: quantity,
+    p_price: price ?? null,
+    p_trigger_price: triggerPrice ?? null,
+    p_position_id: positionId ?? null
+  });
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
