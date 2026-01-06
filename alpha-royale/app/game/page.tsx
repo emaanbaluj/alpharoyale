@@ -26,6 +26,7 @@ interface ChartUnit {
   value: number;
 }
 
+
 const COMPATIBLETICKERS = ["ETH", "BTC", "AAPL"] as const;
 type CompatibleTickers = (typeof COMPATIBLETICKERS)[number];
 
@@ -63,7 +64,7 @@ export default function GamePage() {
 
   useEffect(() => {
     async function loadMarketData() {
-      const res = await fetch('/api/equity-data/get');
+      const res = await fetch('/api/market-data/get');
       const json = await res.json();
       setMarketData(json.marketData);
     }

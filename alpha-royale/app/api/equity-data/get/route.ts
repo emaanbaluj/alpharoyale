@@ -4,52 +4,37 @@ import { NextResponse } from 'next/server';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
 
-const COMPATIBLETICKERS = ['ETH', 'BTC', 'AAPL'] as const;
-type CompatibleTickers = (typeof COMPATIBLETICKERS)[number];
+type ChartUnit = { time: string; value: number };
 
-type ChartUnit = { 
-    time: string; 
-    value: number
-};
-type TickerPriceData = { 
-    ticker: CompatibleTickers; 
-    price: ChartUnit[] 
-};
-type MarketData = Partial<Record<CompatibleTickers, TickerPriceData>>;
+export async function GET(request: Request) {
+    const { searchParams } = new URL(request.url);
+    const gameID = searchParams.get('gameID');
 
-export async function GET() {
+    if (!gameID) {
+        return NextResponse.json({ error: 'Game ID required' }, { status: 400 });
+    }
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    const oneMonthAgo = new Date();
-    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-
-    const { data: priceData, error } = await supabase
-        .from('price_data')
-        .select('*')
-        .gte('timestamp', oneMonthAgo.toISOString())
+    const { data: rows, error } = await supabase
+        .from('equity_history')
+        .select('player_id,equity,timestamp')
+        .eq('game_id', gameID)
         .order('timestamp', { ascending: true });
-    
+
     if (error) {
-        return NextResponse.json({ error: error.message}, { status: 500 });
+        return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    const marketData: MarketData = {};
+    const equityData: Record<string, ChartUnit[]> = {};
 
-    for (const ticker of COMPATIBLETICKERS) {
-        marketData[ticker] = { ticker, price: [] };
-    }
-
-    for (const row of priceData ?? []) {
-        const ticker = row.symbol as CompatibleTickers;
-        if (!marketData[ticker]) continue;
-
-        marketData[ticker]!.price.push({
-            time: row.timestamp, 
-            value: Number(row.price), 
+    for (const r of rows ?? []) {
+        const playerId = r.player_id as string;
+        (equityData[playerId] ??= []).push({
+            time: r.timestamp as string,
+            value: Number(r.equity),
         });
     }
 
-    return NextResponse.json({ marketData });
-    
+    return NextResponse.json({ equityData });
 }
