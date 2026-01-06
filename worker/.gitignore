@@ -1,27 +1,27 @@
 # Dependencies
 node_modules/
 
-# Wrangler build output
+# Wrangler build artifacts
 .wrangler/
-dist/
 
-# Local environment variables
+# Environment variables (contains secrets)
 .dev.vars
 .env
-.env.local
 
 # Logs
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+# TypeScript
+*.tsbuildinfo
+
+# Supabase CLI
+supabase/
+
 

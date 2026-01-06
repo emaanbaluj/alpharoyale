@@ -1,15 +1,37 @@
 {
   "name": "alpharoyale-worker",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "dev": "wrangler dev -c wrangler.toml -c wrangler-game-tick.toml",
+    "dev:main": "wrangler dev",
+    "dev:game-tick": "wrangler dev --config wrangler-game-tick.toml",
+    "dev:all": "echo 'Starting both workers...' && wrangler dev -c wrangler.toml -c wrangler-game-tick.toml",
+    "deploy:main": "wrangler deploy",
+    "deploy:game-tick": "wrangler deploy --config wrangler-game-tick.toml",
+    "deploy:all": "npm run deploy:game-tick && npm run deploy:main",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
+    "test:integration": "tsx src/test-setup.ts",
+    "test:e2e": "tsx src/e2e-test.ts",
+    "test:worker-e2e": "tsx src/worker-e2e-test.ts",
+    "test:setup": "tsx src/test-setup.ts setup",
+    "test:clean": "tsx src/test-setup.ts clean",
+    "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e",
+    "cli": "tsx src/cli.ts"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241106.0",
-    "typescript": "^5",
-    "wrangler": "^3.0.0"
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "@vitest/coverage-v8": "^2.1.8",
+    "prompts": "^2.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8",
+    "wrangler": "^4.54.0"
+  },
+  "peerDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.89.0"
   }
 }
-
