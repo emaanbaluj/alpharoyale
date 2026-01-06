@@ -16,11 +16,13 @@
     "test:worker-e2e": "tsx src/worker-e2e-test.ts",
     "test:setup": "tsx src/test-setup.ts setup",
     "test:clean": "tsx src/test-setup.ts clean",
-    "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e"
+    "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e",
+    "cli": "tsx src/cli.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241127.0",
     "@vitest/coverage-v8": "^2.1.8",
+    "prompts": "^2.4.2",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8",

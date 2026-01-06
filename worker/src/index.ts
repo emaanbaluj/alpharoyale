@@ -36,10 +36,18 @@ async function scheduledHandler(
     const supabase = createSupabaseClient(env);
     
     // 1. Fetch price data from Finnhub API
-    const symbols = ['BTC', 'ETH']; // Tracked symbols
-    console.log(`Fetching price data for symbols: ${symbols.join(', ')}`);
+    // Use Binance crypto symbols (format: EXCHANGE:SYMBOL)
+    // Map: normalized symbol (for DB) -> Finnhub symbol (for API)
+    const symbolMap: Record<string, string> = {
+      'BTC': 'BINANCE:BTCUSDT',
+      'ETH': 'BINANCE:ETHUSDT',
+    };
+    const normalizedSymbols = Object.keys(symbolMap);
+    const finnhubSymbols = normalizedSymbols.map(s => symbolMap[s]);
     
-    const priceData = await fetchPriceDataFromFinnhub(symbols, env.FINNHUB_API_KEY);
+    console.log(`Fetching price data for symbols: ${normalizedSymbols.join(', ')} (via ${finnhubSymbols.join(', ')})`);
+    
+    const priceData = await fetchPriceDataFromFinnhub(finnhubSymbols, env.FINNHUB_API_KEY);
     
     // 2. Get current game state (before incrementing)
     const currentGameStateRow = await db.fetchGameStateFromDB(supabase);
@@ -47,11 +55,20 @@ async function scheduledHandler(
     const nextGameState = currentGameState + 1;
     
     // 3. Store price data in database with new game state
+    // Normalize symbols back to simple format (BTC, ETH) for storage
+    // Create reverse map: finnhub symbol -> normalized symbol
+    const reverseMap: Record<string, string> = {};
+    for (const [normalized, finnhub] of Object.entries(symbolMap)) {
+      reverseMap[finnhub] = normalized;
+    }
+    
     console.log(`Storing price data for game state: ${nextGameState}`);
     await Promise.all(
-      priceData.map(({ symbol, price }) =>
-        db.insertPrice(supabase, symbol, price, nextGameState)
-      )
+      priceData.map(({ symbol: finnhubSymbol, price }) => {
+        // Map Finnhub symbol back to normalized symbol (BTC, ETH)
+        const normalizedSymbol = reverseMap[finnhubSymbol] || finnhubSymbol;
+        return db.insertPrice(supabase, normalizedSymbol, price, nextGameState);
+      })
     );
     
     // 4. Increment game state counter
