@@ -2,6 +2,7 @@
 /node_modules/
 /package.json
 /package-lock.json
+.wrangler
 
 # macOS
 .DS_Store
