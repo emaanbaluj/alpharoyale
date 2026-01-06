@@ -666,6 +666,8 @@ export async function runScenario(scenarioName: string): Promise<boolean> {
         return await scenario_equityHistoryTracking();
       case "extended":
         return await scenario_extendedTrading();
+      case "gameExpiration":
+        return await scenario_gameExpiration();
       default:
         console.error(`Unknown scenario: ${scenarioName}`);
         return false;
@@ -1334,6 +1336,7 @@ Available scenarios:
   positionPnl              Test position P&L calculation
   equityHistory            Test equity history tracking
   extended                 Extended trading scenario with multiple trades across multiple ticks
+  gameExpiration           Test game expiration timeout functionality
 
 Examples:
   npx tsx src/test-setup.ts setup
@@ -1342,7 +1345,130 @@ Examples:
   npx tsx src/test-setup.ts state
   npx tsx src/test-setup.ts clean
   npx tsx src/test-setup.ts scenario marketBuy
+  npx tsx src/test-setup.ts scenario gameExpiration
       `);
+  }
+}
+
+/**
+ * Scenario 8: Game expiration timeout
+ * Tests that games with duration_minutes automatically complete when expired
+ */
+async function scenario_gameExpiration(): Promise<boolean> {
+  const supabase = getSupabase();
+  const playerId = TEST_USERS[0].id;
+  const initialBalance = 10000.0;
+
+  try {
+    console.log("📋 Setting up game expiration scenario...");
+    
+    // Create a game with a very short duration (1 minute)
+    const game = await db.insertGameInDB(supabase, playerId, null, initialBalance, 1); // 1 minute duration
+    await db.insertGamePlayerInDB(supabase, game.id, playerId, initialBalance);
+    
+    // Test 1: Game hasn't started yet (started_at is NULL) - should not expire
+    console.log("\n🧪 Test 1: Game with NULL started_at should not expire");
+    const notStartedResult = await db.checkAndCompleteGameIfExpired(supabase, game.id);
+    const game1 = await db.fetchGamesFromDB(supabase);
+    const game1State = game1.find(g => g.id === game.id);
+    
+    if (notStartedResult || game1State?.status === 'completed') {
+      console.log("   ❌ Test failed: Game without started_at should not be expired");
+      return false;
+    }
+    console.log("   ✅ Game correctly skipped expiration check (not started)");
+    
+    // Test 2: Start the game
+    console.log("\n🧪 Test 2: Starting game...");
+    await db.updateGameStatusInDB(supabase, game.id, "active");
+    const game2 = await db.fetchGamesFromDB(supabase);
+    const game2State = game2.find(g => g.id === game.id);
+    
+    if (!game2State?.started_at) {
+      console.log("   ❌ Test failed: Game should have started_at set when activated");
+      return false;
+    }
+    console.log(`   ✅ Game started at: ${new Date(game2State.started_at).toISOString()}`);
+    console.log(`   ✅ Game duration: ${game2State.duration_minutes} minutes`);
+    
+    // Test 3: Game should not expire immediately after starting
+    console.log("\n🧪 Test 3: Game should not expire immediately after starting");
+    const justStartedResult = await db.checkAndCompleteGameIfExpired(supabase, game.id);
+    const game3 = await db.fetchGamesFromDB(supabase);
+    const game3State = game3.find(g => g.id === game.id);
+    
+    if (justStartedResult || game3State?.status === 'completed') {
+      console.log("   ❌ Test failed: Game should not expire immediately");
+      return false;
+    }
+    console.log("   ✅ Game correctly not expired (within duration)");
+    
+    // Test 4: Manually set started_at to 2 minutes ago (expired)
+    console.log("\n🧪 Test 4: Testing with expired started_at...");
+    const expiredStartedAt = new Date();
+    expiredStartedAt.setMinutes(expiredStartedAt.getMinutes() - 2); // 2 minutes ago (past 1 minute duration)
+    
+    await supabase
+      .from("games")
+      .update({ started_at: expiredStartedAt.toISOString() })
+      .eq("id", game.id);
+    
+    const expiredResult = await db.checkAndCompleteGameIfExpired(supabase, game.id);
+    const game4 = await db.fetchGamesFromDB(supabase);
+    const game4State = game4.find(g => g.id === game.id);
+    
+    if (!expiredResult || game4State?.status !== 'completed') {
+      console.log("   ❌ Test failed: Expired game should be marked as completed");
+      console.log(`      expiredResult: ${expiredResult}`);
+      console.log(`      status: ${game4State?.status}`);
+      return false;
+    }
+    console.log("   ✅ Expired game correctly marked as completed");
+    console.log(`   ✅ Game ended_at: ${game4State?.ended_at ? new Date(game4State.ended_at).toISOString() : 'null'}`);
+    
+    // Test 5: Expired games should return false on subsequent checks (already completed)
+    console.log("\n🧪 Test 5: Expired game should return false on subsequent checks");
+    const alreadyCompletedResult = await db.checkAndCompleteGameIfExpired(supabase, game.id);
+    
+    if (alreadyCompletedResult) {
+      console.log("   ❌ Test failed: Already completed game should return false");
+      return false;
+    }
+    console.log("   ✅ Already completed game correctly returns false");
+    
+    // Test 6: Create another game that expires and test it skips tick processing
+    console.log("\n🧪 Test 6: Creating expired game to test skip in tick processing");
+    const expiredGame = await db.insertGameInDB(supabase, playerId, null, initialBalance, 1); // 1 minute
+    await db.insertGamePlayerInDB(supabase, expiredGame.id, playerId, initialBalance);
+    await db.updateGameStatusInDB(supabase, expiredGame.id, "active");
+    
+    // Set started_at to past expiration
+    const expiredStartedAt2 = new Date();
+    expiredStartedAt2.setMinutes(expiredStartedAt2.getMinutes() - 2);
+    await supabase
+      .from("games")
+      .update({ started_at: expiredStartedAt2.toISOString() })
+      .eq("id", expiredGame.id);
+    
+    // Simulate what the bound worker does - check expiration before processing
+    const shouldSkipProcessing = await db.checkAndCompleteGameIfExpired(supabase, expiredGame.id);
+    const expiredGameState = await db.fetchGamesFromDB(supabase);
+    const expiredGameFinal = expiredGameState.find(g => g.id === expiredGame.id);
+    
+    if (!shouldSkipProcessing || expiredGameFinal?.status !== 'completed') {
+      console.log("   ❌ Test failed: Expired game should be completed before tick processing");
+      return false;
+    }
+    console.log("   ✅ Expired game correctly skipped tick processing");
+    
+    // Cleanup
+    await supabase.from("games").delete().in("id", [game.id, expiredGame.id]);
+    
+    console.log("\n✅ Game expiration scenario passed!");
+    return true;
+  } catch (error) {
+    console.error("❌ Game expiration scenario failed:", error);
+    return false;
   }
 }
 
