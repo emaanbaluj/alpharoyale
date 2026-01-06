@@ -1,3 +1,27 @@
+# Dependencies
+node_modules/
+
+# Wrangler build artifacts
+.wrangler/
+
+# Environment variables (contains secrets)
 .dev.vars
 .env
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# TypeScript
+*.tsbuildinfo
+
+# Supabase CLI
+supabase/
+
 

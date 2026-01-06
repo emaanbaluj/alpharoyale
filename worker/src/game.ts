@@ -264,6 +264,16 @@ async function handleBuyMarketOrder(
     tick
   );
 
+  // D) Deduct balance (cost of purchase)
+  const cost = fillPrice * qty;
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
+  const player = players.find(p => p.user_id === order.player_id);
+  if (player) {
+    const newBalance = Number(player.balance) - cost;
+    // Get current equity (will be recalculated by updatePlayerBalances later)
+    const currentEquity = Number(player.equity);
+    await db.updateGamePlayerBalanceInDB(supabase, gameId, order.player_id, newBalance, currentEquity);
+  }
 
   if (!existing) {
     const created = await db.insertPositionInDB(
@@ -323,19 +333,28 @@ async function handleSellMarketOrder(
     tick
   );
 
-  // C) Log Position
-  if (!existing) {
-    const created = await db.insertPositionInDB(
-      supabase,
-      gameId,
-      order.player_id,
-      order.symbol,
-      "BUY",
-      qty,
-      fillPrice,
-      1
-    );
-    posByKey.set(key, created);
+  // C) Add balance (proceeds from sale)
+  const proceeds = fillPrice * qty;
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
+  const player = players.find(p => p.user_id === order.player_id);
+  if (player) {
+    const newBalance = Number(player.balance) + proceeds;
+    // Get current equity (will be recalculated by updatePlayerBalances later)
+    const currentEquity = Number(player.equity);
+    await db.updateGamePlayerBalanceInDB(supabase, gameId, order.player_id, newBalance, currentEquity);
+  }
+
+  // D) Close or reduce position
+  if (qty === posQty) {
+    // Close position completely
+    await db.updatePositionInDB(supabase, existing.id, {
+      status: "closed",
+      closed_at: new Date().toISOString(),
+    });
+    posByKey.delete(key);
+  } else {
+    // Partial close - reduce quantity (not implemented in v1, reject for now)
+    await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 }
@@ -407,6 +426,39 @@ export async function updatePlayerBalances(supabase: SupabaseClient, gameId: str
   }
 }
 
+/**
+ * Process a game tick for a single game.
+ * This function orchestrates all game logic for a single tick.
+ *
+ * @param gameId - The ID of the game to process
+ * @param gameState - The current game state (tick number)
+ * @param supabase - Supabase client instance
+ */
+export async function processGameTick(
+  gameId: string,
+  gameState: number,
+  supabase: SupabaseClient
+): Promise<void> {
+  console.log(`Processing game tick for game ${gameId} at game state ${gameState}`);
+
+  // 1. Process market orders
+  await processMarketOrders(supabase, gameId, gameState);
+
+  // 2. Update positions with current prices and unrealized P&L
+  await updatePositions(supabase, gameId);
+
+  // 3. Update player balances and equity
+  await updatePlayerBalances(supabase, gameId);
+
+  // 4. Process conditional orders (TP/SL)
+  await processConditionalOrders(supabase, gameId, gameState);
+
+  // 5. Record equity history
+  await updateEquityHistory(supabase, gameId, gameState);
+
+  console.log(`Completed game tick processing for game ${gameId}`);
+}
+
 export async function updateEquityHistory(
   supabase: SupabaseClient,
   gameId: string,
@@ -429,5 +481,4 @@ export async function updateEquityHistory(
     );
   }
 }
-
 
