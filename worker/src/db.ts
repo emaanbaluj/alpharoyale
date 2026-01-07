@@ -358,6 +358,33 @@ export async function updateGamePlayerBalanceInDB(
   if (error) throw new Error(`Supabase error: ${error.message}`);
 }
 
+/**
+ * Update only equity for a player in game_players (balance remains unchanged).
+ * This is used when we only need to refresh equity based on updated unrealized P&L.
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID
+ * @param userId - Player user ID
+ * @param newEquity - New equity value
+ */
+export async function updateGamePlayerEquityInDB(
+  supabase: SupabaseClient,
+  gameId: string,
+  userId: string,
+  newEquity: number
+): Promise<void> {
+  const { error } = await supabase
+    .from("game_players")
+    .update({
+      equity: newEquity,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("game_id", gameId)
+    .eq("user_id", userId);
+
+  if (error) throw new Error(`Supabase error: ${error.message}`);
+}
+
 // --------------------
 // positions
 // --------------------

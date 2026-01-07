@@ -260,6 +260,42 @@ export async function processConditionalOrders(
 }
 
 // --------------------
+// Helper functions
+// --------------------
+
+/**
+ * Recalculate and update equity for a single player based on their current balance and open positions.
+ * This is called after positions are closed/updated to ensure equity is immediately correct.
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID
+ * @param playerId - Player user ID
+ * @param currentBalance - Current balance (already updated)
+ */
+async function recalculatePlayerEquity(
+  supabase: SupabaseClient,
+  gameId: string,
+  playerId: string,
+  currentBalance: number
+): Promise<void> {
+  // Fetch all remaining open positions for this player
+  const openPositions = await db.fetchPositionsFromDB(supabase, gameId, "open");
+  const playerOpenPositions = openPositions.filter((pos: any) => pos.player_id === playerId);
+
+  // Sum unrealized P&L from remaining open positions
+  const totalUnrealizedPnl = playerOpenPositions.reduce((sum: number, pos: any) => {
+    const pnl = Number(pos.unrealized_pnl ?? 0);
+    return sum + (Number.isFinite(pnl) ? pnl : 0);
+  }, 0);
+
+  // Calculate new equity = balance + unrealized P&L from remaining open positions
+  const newEquity = currentBalance + totalUnrealizedPnl;
+
+  // Update balance and equity
+  await db.updateGamePlayerBalanceInDB(supabase, gameId, playerId, currentBalance, newEquity);
+}
+
+// --------------------
 // Handle functions
 // --------------------
 
@@ -349,13 +385,8 @@ async function handleBuyMarketOrder(
   const cost = qty * fillPrice;
   const newBalance = Number(player.balance) - cost;
 
-  await db.updateGamePlayerBalanceInDB(
-    supabase,
-    gameId,
-    order.player_id,
-    newBalance,
-    Number(player.equity)
-  );
+  // Recalculate equity based on all open positions (including the newly created/updated one)
+  await recalculatePlayerEquity(supabase, gameId, order.player_id, newBalance);
 }
 
 /**
@@ -423,19 +454,9 @@ async function handleSellMarketOrder(
     return;
   }
 
-  const proceeds = fillPrice * qty;
-  const newBalance = Number(player.balance) + proceeds;
-
-  await db.updateGamePlayerBalanceInDB(
-    supabase,
-    gameId,
-    order.player_id,
-    newBalance,
-    Number(player.equity)
-  );
-
   const remainingQty = posQty - qty;
 
+  // Update position first (before recalculating equity)
   if (remainingQty <= 0) {
     await db.updatePositionInDB(supabase, pos.id, {
       status: "closed",
@@ -450,6 +471,11 @@ async function handleSellMarketOrder(
     pos.quantity = remainingQty as any;
     posByKey.set(key, pos);
   }
+
+  // Calculate new balance and recalculate equity based on remaining open positions
+  const proceeds = fillPrice * qty;
+  const newBalance = Number(player.balance) + proceeds;
+  await recalculatePlayerEquity(supabase, gameId, order.player_id, newBalance);
 }
 
 /**
@@ -538,13 +564,8 @@ async function handleBuyLimitOrder(
   const cost = qty * fillPrice;
   const newBalance = Number(player.balance) - cost;
 
-  await db.updateGamePlayerBalanceInDB(
-    supabase,
-    gameId,
-    order.player_id,
-    newBalance,
-    Number(player.equity)
-  );
+  // Recalculate equity based on all open positions (including the newly created/updated one)
+  await recalculatePlayerEquity(supabase, gameId, order.player_id, newBalance);
 }
 
 /**
@@ -612,19 +633,9 @@ async function handleSellLimitOrder(
     return;
   }
 
-  const proceeds = fillPrice * qty;
-  const newBalance = Number(player.balance) + proceeds;
-
-  await db.updateGamePlayerBalanceInDB(
-    supabase,
-    gameId,
-    order.player_id,
-    newBalance,
-    Number(player.equity)
-  );
-
   const remainingQty = posQty - qty;
 
+  // Update position first (before recalculating equity)
   if (remainingQty <= 0) {
     await db.updatePositionInDB(supabase, pos.id, {
       status: "closed",
@@ -639,6 +650,11 @@ async function handleSellLimitOrder(
     pos.quantity = remainingQty as any;
     posByKey.set(key, pos);
   }
+
+  // Calculate new balance and recalculate equity based on remaining open positions
+  const proceeds = fillPrice * qty;
+  const newBalance = Number(player.balance) + proceeds;
+  await recalculatePlayerEquity(supabase, gameId, order.player_id, newBalance);
 }
 
 /**
@@ -722,6 +738,7 @@ async function handleTakeProfitOrder(
 
   const remainingQty = posQty - orderQty;
 
+  // Update position first (before recalculating equity)
   if (remainingQty <= 0) {
     await db.updatePositionInDB(supabase, pos.id, {
       status: "closed",
@@ -738,16 +755,10 @@ async function handleTakeProfitOrder(
     posById.set(pos.id, pos);
   }
 
+  // Calculate new balance and recalculate equity based on remaining open positions
   const proceeds = px * orderQty;
   const newBalance = Number(player.balance) + proceeds;
-
-  await db.updateGamePlayerBalanceInDB(
-    supabase,
-    gameId,
-    order.player_id,
-    newBalance,
-    Number(player.equity)
-  );
+  await recalculatePlayerEquity(supabase, gameId, order.player_id, newBalance);
 }
 
 /**
@@ -850,13 +861,8 @@ async function handleStopLossOrder(
   const proceeds = px * orderQty;
   const newBalance = Number(player.balance) + proceeds;
 
-  await db.updateGamePlayerBalanceInDB(
-    supabase,
-    gameId,
-    order.player_id,
-    newBalance,
-    Number(player.equity)
-  );
+  // Recalculate equity based on remaining open positions
+  await recalculatePlayerEquity(supabase, gameId, order.player_id, newBalance);
 }
 
 // --------------------
@@ -939,7 +945,11 @@ export async function updatePlayerBalances(
     const unrealised = unrealisedByPlayer.get(p.user_id) ?? 0;
     const equity = balance + unrealised;
 
-    await db.updateGamePlayerBalanceInDB(supabase, gameId, p.user_id, balance, equity);
+    // IMPORTANT: Only update equity here, NOT balance!
+    // Balance is already correctly updated by recalculatePlayerEquity in order handlers.
+    // This function is called after updatePositions to refresh equity based on updated unrealized P&L.
+    // We use updateGamePlayerEquityInDB to avoid overwriting correctly updated balances from order processing.
+    await db.updateGamePlayerEquityInDB(supabase, gameId, p.user_id, equity);
   }
 }
 
