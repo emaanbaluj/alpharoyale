@@ -78,3 +78,23 @@ export const subscribeToPrices = (callback: (payload: any) => void) => {
     supabase.removeChannel(channel);
   };
 };
+
+export const subscribeToEquityHistory = (gameId: string, callback: (payload: any) => void) => {
+  const channel = supabase
+    .channel(`equity-history-${gameId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'equity_history',
+        filter: `game_id=eq.${gameId}`
+      },
+      callback
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+};

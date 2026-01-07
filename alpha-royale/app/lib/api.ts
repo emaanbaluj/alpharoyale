@@ -62,3 +62,22 @@ export const statsAPI = {
     return res.json();
   }
 };
+
+export const priceAPI = {
+  async getPriceHistory(symbol: string, limit?: number) {
+    const res = await fetch(`/api/prices/history?symbol=${symbol}${limit ? `&limit=${limit}` : ''}`);
+    return res.json();
+  },
+
+  async getLatestPrices() {
+    const res = await fetch('/api/prices/latest');
+    return res.json();
+  }
+};
+
+export const equityAPI = {
+  async getEquityHistory(gameId: string, playerId: string) {
+    const res = await fetch(`/api/equity/history?gameId=${gameId}&playerId=${playerId}`);
+    return res.json();
+  }
+};
