@@ -15,3 +15,5 @@
 # IDE
 .vscode/
 .idea/
+FRONTEND_INTEGRATION.md
+LOCAL_DEV_SETUP.md
