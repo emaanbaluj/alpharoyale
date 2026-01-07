@@ -1,7 +1,17 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import * as db from "./db";
 
-// Get latest price from database
+// --------------------
+// Helpers
+// --------------------
+
+/**
+ * Get latest price (most recent row) for each symbol from price_data.
+ *
+ * @param supabase - Supabase client instance
+ * @param symbols - List of symbols to fetch
+ * @returns Map(symbol -> latest price)
+ */
 async function getLatestPricesBySymbol(
   supabase: SupabaseClient,
   symbols: string[]
@@ -12,18 +22,19 @@ async function getLatestPricesBySymbol(
     const rows = await db.fetchPriceDataFromDB(supabase, sym, 1);
     if (rows[0]) priceBySymbol.set(sym, Number(rows[0].price));
   }
+
   return priceBySymbol;
 }
 
 /**
- * Checks if the player has enough balance to place a buy order.
- * 
+ * Checks if the player has enough balance to BUY qty at price.
+ *
  * @param supabase - Supabase client instance
- * @param gameId - The ID of the game to check
- * @param playerId - The player placing the order
- * @param quantity - The quantity of the asset to buy
- * @param price - The price of the asset at which the player is trying to buy
- * @returns `true` if the player has enough balance, `false` otherwise
+ * @param gameId - Game ID
+ * @param playerId - Player user ID
+ * @param quantity - Qty to buy
+ * @param price - Fill price to use for cost check
+ * @returns true if balance >= quantity*price
  */
 async function checkBalanceForBuy(
   supabase: SupabaseClient,
@@ -32,40 +43,31 @@ async function checkBalanceForBuy(
   quantity: number,
   price: number
 ): Promise<boolean> {
-  // Fetch the player's balance in the game
-  const { data: playerData, error: playerError } = await supabase
+  const { data, error } = await supabase
     .from("game_players")
     .select("balance")
     .eq("game_id", gameId)
     .eq("user_id", playerId)
     .single();
 
-  if (playerError) {
-    console.error("Error fetching player data:", playerError);
-    return false; // Reject if error occurs while fetching player balance
-  }
+  if (error) return false;
 
-  const playerBalance = Number(playerData?.balance || 0);
-  const totalCost = quantity * price; // Total cost to buy the asset
+  const balance = Number(data?.balance ?? 0);
+  const cost = quantity * price;
 
-  // Check if the player has enough balance to cover the cost
-  if (playerBalance >= totalCost) {
-    return true; // Player has enough balance
-  }
-
-  console.log(`Player ${playerId} does not have enough balance to buy ${quantity} units at ${price}`);
-  return false; // Player does not have enough balance
+  return Number.isFinite(balance) && balance >= cost;
 }
 
 /**
- * Checks if the player has enough open positions to sell.
- * 
+ * Checks if the player has enough open position size to SELL qty for symbol.
+ * (v1 long-only: must have an open BUY position with quantity >= qty)
+ *
  * @param supabase - Supabase client instance
- * @param gameId - The ID of the game to check
- * @param playerId - The player attempting to sell
- * @param quantity - The quantity of the asset to sell
- * @param symbol - The asset symbol to check for
- * @returns `true` if the player has enough open positions, `false` otherwise
+ * @param gameId - Game ID
+ * @param playerId - Player user ID
+ * @param quantity - Qty to sell
+ * @param symbol - Symbol
+ * @returns true if open position quantity >= requested quantity
  */
 async function checkPositionsForSell(
   supabase: SupabaseClient,
@@ -74,31 +76,26 @@ async function checkPositionsForSell(
   quantity: number,
   symbol: string
 ): Promise<boolean> {
-  // Fetch the player's open position for the specified symbol
-  const { data: positionData, error: positionError } = await supabase
+  const { data, error } = await supabase
     .from("positions")
-    .select("quantity")
+    .select("quantity,side,status")
     .eq("game_id", gameId)
     .eq("player_id", playerId)
     .eq("symbol", symbol)
     .eq("status", "open")
     .single();
 
-  if (positionError) {
-    console.error("Error fetching position data:", positionError);
-    return false; // Reject if error occurs while fetching the position data
-  }
+  if (error) return false;
 
-  const openPositionQty = Number(positionData?.quantity || 0);
+  if (data?.side !== "BUY" || data?.status !== "open") return false;
 
-  // Check if the player has enough open positions to sell
-  if (openPositionQty >= quantity) {
-    return true; // Player has enough positions to sell
-  }
-
-  console.log(`Player ${playerId} does not have enough open positions to sell ${quantity} units of ${symbol}`);
-  return false; // Not enough positions to sell
+  const posQty = Number(data?.quantity ?? 0);
+  return Number.isFinite(posQty) && posQty >= quantity;
 }
+
+// --------------------
+// Process functions
+// --------------------
 
 /**
  * Process all pending MARKET orders for a game.
@@ -109,7 +106,6 @@ async function checkPositionsForSell(
  *
  * Notes:
  * - If no price is available for a symbol this tick, the order remains pending.
- * - Balance/equity updates happen inside handlers, and equity is recalculated later.
  *
  * @param supabase - Supabase client instance
  * @param gameId - The game ID to process
@@ -120,22 +116,18 @@ export async function processMarketOrders(
   gameId: string,
   tick: number
 ): Promise<void> {
-  // Fetch pending market orders
   const marketOrders = await db.fetchOrdersFromDB(supabase, gameId, "pending", "MARKET");
   if (marketOrders.length === 0) return;
 
-  // Preload latest prices (1 per symbol)
   const symbols = Array.from(new Set(marketOrders.map((o) => o.symbol)));
   const priceBySymbol = await getLatestPricesBySymbol(supabase, symbols);
 
-  // Preload open positions for quick lookup (player+symbol)
   const openPositions = await db.fetchPositionsFromDB(supabase, gameId, "open");
   const posByKey = new Map(openPositions.map((p) => [`${p.player_id}:${p.symbol}`, p]));
 
-  // Process each order
   for (const order of marketOrders) {
     const fillPrice = priceBySymbol.get(order.symbol);
-    if (fillPrice == null) continue; // no price this tick => keep pending
+    if (fillPrice == null) continue; // keep pending
 
     const qty = Number(order.quantity);
     if (!Number.isFinite(qty) || qty <= 0) {
@@ -144,26 +136,15 @@ export async function processMarketOrders(
     }
 
     if (order.side === "BUY") {
-      const canBuy = await checkBalanceForBuy(supabase, gameId, order.player_id, qty, fillPrice);
-      if (!canBuy) {
-        await db.updateOrderInDB(supabase, order.id, "rejected");
-        continue;
-      }
       await handleBuyMarketOrder(supabase, gameId, tick, order, qty, fillPrice, posByKey);
       continue;
     }
 
     if (order.side === "SELL") {
-      const canSell = await checkPositionsForSell(supabase, gameId, order.player_id, qty, order.symbol);
-      if (!canSell) {
-        await db.updateOrderInDB(supabase, order.id, "rejected");
-        continue;
-      }
       await handleSellMarketOrder(supabase, gameId, tick, order, qty, fillPrice, posByKey);
       continue;
     }
 
-    // unknown side
     await db.updateOrderInDB(supabase, order.id, "rejected");
   }
 }
@@ -173,40 +154,33 @@ export async function processMarketOrders(
  * - Loads pending LIMIT orders
  * - Loads latest prices for required symbols
  * - Loads open positions (for BUY merge + SELL reduce/close)
- * - Routes each order to BUY or SELL handler
+ * - Routes each order to BUY or SELL handler if the limit condition is met
  *
  * Notes:
- * - If no price is available for a symbol this tick, the order remains pending.
- * - Balance/equity updates happen inside handlers, and equity is recalculated later.
+ * - If limit is NOT hit, order stays pending (we do NOT reject it).
+ * - If no price is available for a symbol this tick, order stays pending.
  *
  * @param supabase - Supabase client instance
  * @param gameId - The game ID to process
  * @param tick - The current tick number (game state)
  */
-async function processLimitOrders(
+export async function processLimitOrders(
   supabase: SupabaseClient,
   gameId: string,
   tick: number
 ): Promise<void> {
-  // Fetch all open limit orders from the database
   const limitOrders = await db.fetchOrdersFromDB(supabase, gameId, "pending", "LIMIT");
-
   if (limitOrders.length === 0) return;
 
-  // Preload the latest prices
-  const symbols = Array.from(new Set(limitOrders.map(o => o.symbol)));
+  const symbols = Array.from(new Set(limitOrders.map((o) => o.symbol)));
   const priceBySymbol = await getLatestPricesBySymbol(supabase, symbols);
 
-  // Preload open positions for each player (needed for BUY merge and SELL reduce/close)
   const openPositions = await db.fetchPositionsFromDB(supabase, gameId, "open");
-  const posByKey = new Map(openPositions.map(p => [`${p.player_id}:${p.symbol}`, p]));
+  const posByKey = new Map(openPositions.map((p) => [`${p.player_id}:${p.symbol}`, p]));
 
-  // Process each limit order
   for (const order of limitOrders) {
     const fillPrice = priceBySymbol.get(order.symbol);
-    const limitPrice = Number(order.price);
-
-    if (fillPrice == null) continue; // Skip if no price available for the symbol this tick
+    if (fillPrice == null) continue; // keep pending
 
     const qty = Number(order.quantity);
     if (!Number.isFinite(qty) || qty <= 0) {
@@ -214,27 +188,28 @@ async function processLimitOrders(
       continue;
     }
 
-    if (order.side === "BUY" && fillPrice <= limitPrice) {
-      const canBuy = await checkBalanceForBuy(supabase, gameId, order.player_id, qty, fillPrice);
-      if (!canBuy) {
-        await db.updateOrderInDB(supabase, order.id, "rejected");
-        continue;
-      }
-      await handleBuyLimitOrder(supabase, gameId, tick, order, qty, fillPrice, posByKey);
+    const limitPrice = Number(order.price);
+    if (!Number.isFinite(limitPrice) || limitPrice <= 0) {
+      await db.updateOrderInDB(supabase, order.id, "rejected");
       continue;
     }
 
-    if (order.side === "SELL" && fillPrice >= limitPrice) {
-      const canSell = await checkPositionsForSell(supabase, gameId, order.player_id, qty, order.symbol);
-      if (!canSell) {
-        await db.updateOrderInDB(supabase, order.id, "rejected");
-        continue;
+    // BUY LIMIT triggers when last <= limit
+    if (order.side === "BUY") {
+      if (fillPrice <= limitPrice) {
+        await handleBuyLimitOrder(supabase, gameId, tick, order, qty, fillPrice, posByKey);
       }
-      await handleSellLimitOrder(supabase, gameId, tick, order, qty, fillPrice, posByKey);
-      continue;
+      continue; // else keep pending
     }
 
-    // Unknown side, reject the order
+    // SELL LIMIT triggers when last >= limit
+    if (order.side === "SELL") {
+      if (fillPrice >= limitPrice) {
+        await handleSellLimitOrder(supabase, gameId, tick, order, qty, fillPrice, posByKey);
+      }
+      continue; // else keep pending
+    }
+
     await db.updateOrderInDB(supabase, order.id, "rejected");
   }
 }
@@ -255,7 +230,6 @@ export async function processConditionalOrders(
   gameId: string,
   tick: number
 ): Promise<void> {
-  // Load pending conditional orders
   const allOrders = await db.fetchOrdersFromDB(supabase, gameId);
 
   const takeProfitOrders = allOrders.filter(
@@ -268,17 +242,14 @@ export async function processConditionalOrders(
 
   if (takeProfitOrders.length === 0 && stopLossOrders.length === 0) return;
 
-  // Load open positions once (we only trigger TP/SL against open positions)
   const openPositions = await db.fetchPositionsFromDB(supabase, gameId, "open");
   const posById = new Map(openPositions.map((p) => [p.id, p]));
 
-  // Load latest prices once per symbol used by conditional orders
   const symbols = Array.from(
     new Set([...takeProfitOrders, ...stopLossOrders].map((o) => o.symbol))
   );
   const priceBySymbol = await getLatestPricesBySymbol(supabase, symbols);
 
-  // Handle TP then SL (keep consistent ordering)
   for (const o of takeProfitOrders) {
     await handleTakeProfitOrder(supabase, gameId, tick, o, posById, priceBySymbol);
   }
@@ -288,6 +259,25 @@ export async function processConditionalOrders(
   }
 }
 
+// --------------------
+// Handle functions
+// --------------------
+
+/**
+ * Handle a single BUY market order.
+ * - Checks balance using checkBalanceForBuy
+ * - Marks order filled + logs execution
+ * - Creates/merges position
+ * - Debits player cash balance
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID
+ * @param tick - Tick number
+ * @param order - Order row
+ * @param qty - Qty
+ * @param fillPrice - Fill price (latest)
+ * @param posByKey - Map of open positions keyed by `${player_id}:${symbol}`
+ */
 async function handleBuyMarketOrder(
   supabase: SupabaseClient,
   gameId: string,
@@ -297,56 +287,21 @@ async function handleBuyMarketOrder(
   fillPrice: number,
   posByKey: Map<string, any>
 ): Promise<void> {
-  const limitPrice = Number(order.price);
-
-  // Check balance for the buy order
-  const balanceCheck = await checkBalanceForBuy(supabase, gameId, order.player_id, qty, fillPrice);
-  if (!balanceCheck) {
-    // Reject the order if the player doesn't have enough balance
+  const canBuy = await checkBalanceForBuy(supabase, gameId, order.player_id, qty, fillPrice);
+  if (!canBuy) {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
-  // Get or create the position for the player
-  const key = `${order.player_id}:${order.symbol}`;
-  const existingPosition = posByKey.get(key);
-
-  // If the position does not exist, create a new one
-  if (!existingPosition) {
-    const created = await db.insertPositionInDB(
-      supabase,
-      gameId,
-      order.player_id,
-      order.symbol,
-      "BUY",
-      qty,
-      fillPrice,
-      1 // leverage = 1 by default
-    );
-    posByKey.set(key, created);
-  } else {
-    // If the position exists, update the quantity and entry price
-    const newQty = existingPosition.quantity + qty;
-    const newEntryPrice = (existingPosition.entry_price * existingPosition.quantity + fillPrice * qty) / newQty;
-
-    await db.updatePositionInDB(supabase, existingPosition.id, { quantity: newQty, entryPrice: newEntryPrice });
-    existingPosition.quantity = newQty;
-    existingPosition.entry_price = newEntryPrice;
-    posByKey.set(key, existingPosition);
-  }
-
-  // Mark the order as filled
-  await db.updateOrderInDB(supabase, order.id, "filled", fillPrice);
-
-  // Update player's balance after the buy order
   const players = await db.fetchGamePlayersFromDB(supabase, gameId, order.player_id);
   const player = players[0];
-  if (player) {
-    const newBalance = player.balance - qty * fillPrice;
-    await db.updateGamePlayerBalanceInDB(supabase, gameId, order.player_id, newBalance, player.equity);
+  if (!player) {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
   }
 
-  // Log execution (audit trail)
+  await db.updateOrderInDB(supabase, order.id, "filled", fillPrice);
+
   await db.insertOrderExecutionInDB(
     supabase,
     order.id,
@@ -358,8 +313,66 @@ async function handleBuyMarketOrder(
     fillPrice,
     tick
   );
+
+  const key = `${order.player_id}:${order.symbol}`;
+  const existing = posByKey.get(key);
+
+  if (!existing) {
+    const created = await db.insertPositionInDB(
+      supabase,
+      gameId,
+      order.player_id,
+      order.symbol,
+      "BUY",
+      qty,
+      fillPrice,
+      1
+    );
+    posByKey.set(key, created);
+  } else {
+    const oldQty = Number(existing.quantity);
+    const oldEntry = Number(existing.entry_price);
+
+    const newQty = oldQty + qty;
+    const newEntry = (oldQty * oldEntry + qty * fillPrice) / newQty;
+
+    await db.updatePositionInDB(supabase, existing.id, {
+      quantity: newQty,
+      entryPrice: newEntry,
+    });
+
+    existing.quantity = newQty as any;
+    existing.entry_price = newEntry as any;
+    posByKey.set(key, existing);
+  }
+
+  const cost = qty * fillPrice;
+  const newBalance = Number(player.balance) - cost;
+
+  await db.updateGamePlayerBalanceInDB(
+    supabase,
+    gameId,
+    order.player_id,
+    newBalance,
+    Number(player.equity)
+  );
 }
 
+/**
+ * Handle a single SELL market order.
+ * - Checks position size using checkPositionsForSell
+ * - Marks order filled + logs execution
+ * - Reduces/closes position
+ * - Credits player cash balance with proceeds
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID
+ * @param tick - Tick number
+ * @param order - Order row
+ * @param qty - Qty
+ * @param fillPrice - Fill price (latest)
+ * @param posByKey - Map of open positions keyed by `${player_id}:${symbol}`
+ */
 async function handleSellMarketOrder(
   supabase: SupabaseClient,
   gameId: string,
@@ -369,31 +382,28 @@ async function handleSellMarketOrder(
   fillPrice: number,
   posByKey: Map<string, any>
 ): Promise<void> {
+  const canSell = await checkPositionsForSell(supabase, gameId, order.player_id, qty, order.symbol);
+  if (!canSell) {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
+  }
+
   const key = `${order.player_id}:${order.symbol}`;
   const pos = posByKey.get(key);
 
-  // Must have an open long to sell
-  if (!pos || pos.side !== "BUY") {
+  if (!pos || pos.side !== "BUY" || pos.status !== "open") {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
   const posQty = Number(pos.quantity);
-  if (!Number.isFinite(posQty) || posQty <= 0) {
+  if (!Number.isFinite(posQty) || posQty <= 0 || qty > posQty) {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
-  // Reject oversell
-  if (qty > posQty) {
-    await db.updateOrderInDB(supabase, order.id, "rejected");
-    return;
-  }
-
-  // Update order in the database as filled
   await db.updateOrderInDB(supabase, order.id, "filled", fillPrice);
 
-  // Insert Order Execution to Database
   await db.insertOrderExecutionInDB(
     supabase,
     order.id,
@@ -406,38 +416,37 @@ async function handleSellMarketOrder(
     tick
   );
 
-  // Credit player balance with proceeds
-  const proceeds = fillPrice * qty;
-
-  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
-  const player = players.find((p) => p.user_id === order.player_id);
-
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId, order.player_id);
+  const player = players[0];
   if (!player) {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
+  const proceeds = fillPrice * qty;
   const newBalance = Number(player.balance) + proceeds;
-  await db.updateGamePlayerBalanceInDB(supabase, gameId, order.player_id, newBalance, player.equity);
 
-  // Reduce or close position
+  await db.updateGamePlayerBalanceInDB(
+    supabase,
+    gameId,
+    order.player_id,
+    newBalance,
+    Number(player.equity)
+  );
+
   const remainingQty = posQty - qty;
 
   if (remainingQty <= 0) {
-    // close fully
     await db.updatePositionInDB(supabase, pos.id, {
       status: "closed",
       currentPrice: fillPrice,
     });
-
     posByKey.delete(key);
   } else {
-    // partial close: reduce quantity (entry stays the same)
     await db.updatePositionInDB(supabase, pos.id, {
       quantity: remainingQty,
       currentPrice: fillPrice,
     });
-
     pos.quantity = remainingQty as any;
     posByKey.set(key, pos);
   }
@@ -445,17 +454,17 @@ async function handleSellMarketOrder(
 
 /**
  * Handle a single BUY limit order.
- * - Checks balance for the buy order
- * - Marks order as filled and logs execution
- * - Creates a new position if none exists, otherwise merges into existing position
- * - Updates player's balance (equity recalculated later)
+ * - Checks balance using checkBalanceForBuy
+ * - Marks order filled + logs execution
+ * - Creates/merges position
+ * - Debits player cash balance
  *
  * @param supabase - Supabase client instance
- * @param gameId - The game ID to process
- * @param tick - The current tick number (game state)
- * @param order - The limit order row
- * @param qty - Parsed numeric quantity
- * @param fillPrice - Latest price used for filling
+ * @param gameId - Game ID
+ * @param tick - Tick number
+ * @param order - Order row
+ * @param qty - Qty
+ * @param fillPrice - Fill price (latest, and should be <= limit to get here)
  * @param posByKey - Map of open positions keyed by `${player_id}:${symbol}`
  */
 async function handleBuyLimitOrder(
@@ -467,60 +476,21 @@ async function handleBuyLimitOrder(
   fillPrice: number,
   posByKey: Map<string, any>
 ): Promise<void> {
-  const limitPrice = Number(order.price);
-
-  // Check balance for the buy order
-  const balanceCheck = await checkBalanceForBuy(supabase, gameId, order.player_id, qty, fillPrice);
-  if (!balanceCheck) {
-    // Reject the order if the player doesn't have enough balance
+  const canBuy = await checkBalanceForBuy(supabase, gameId, order.player_id, qty, fillPrice);
+  if (!canBuy) {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
-  // Get or create the position for the player
-  const key = `${order.player_id}:${order.symbol}`;
-  const existingPosition = posByKey.get(key);
-
-  // If the position does not exist, create a new one
-  if (!existingPosition) {
-    const created = await db.insertPositionInDB(
-      supabase,
-      gameId,
-      order.player_id,
-      order.symbol,
-      "BUY",
-      qty,
-      fillPrice,
-      1 // leverage = 1 by default
-    );
-    posByKey.set(key, created);
-  } else {
-    // If the position exists, update the quantity and entry price
-    const newQty = existingPosition.quantity + qty;
-    const newEntryPrice = (existingPosition.entry_price * existingPosition.quantity + fillPrice * qty) / newQty;
-
-    await db.updatePositionInDB(supabase, existingPosition.id, {
-      quantity: newQty,
-      entryPrice: newEntryPrice,
-    });
-
-    existingPosition.quantity = newQty;
-    existingPosition.entry_price = newEntryPrice;
-    posByKey.set(key, existingPosition);
-  }
-
-  // Mark the order as filled
-  await db.updateOrderInDB(supabase, order.id, "filled", fillPrice);
-
-  // Update player's balance after the buy order
   const players = await db.fetchGamePlayersFromDB(supabase, gameId, order.player_id);
   const player = players[0];
-  if (player) {
-    const newBalance = player.balance - qty * fillPrice;
-    await db.updateGamePlayerBalanceInDB(supabase, gameId, order.player_id, newBalance, player.equity);
+  if (!player) {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
   }
 
-  // Log execution (audit trail)
+  await db.updateOrderInDB(supabase, order.id, "filled", fillPrice);
+
   await db.insertOrderExecutionInDB(
     supabase,
     order.id,
@@ -532,22 +502,64 @@ async function handleBuyLimitOrder(
     fillPrice,
     tick
   );
-}
 
+  const key = `${order.player_id}:${order.symbol}`;
+  const existing = posByKey.get(key);
+
+  if (!existing) {
+    const created = await db.insertPositionInDB(
+      supabase,
+      gameId,
+      order.player_id,
+      order.symbol,
+      "BUY",
+      qty,
+      fillPrice,
+      1
+    );
+    posByKey.set(key, created);
+  } else {
+    const oldQty = Number(existing.quantity);
+    const oldEntry = Number(existing.entry_price);
+
+    const newQty = oldQty + qty;
+    const newEntry = (oldQty * oldEntry + qty * fillPrice) / newQty;
+
+    await db.updatePositionInDB(supabase, existing.id, {
+      quantity: newQty,
+      entryPrice: newEntry,
+    });
+
+    existing.quantity = newQty as any;
+    existing.entry_price = newEntry as any;
+    posByKey.set(key, existing);
+  }
+
+  const cost = qty * fillPrice;
+  const newBalance = Number(player.balance) - cost;
+
+  await db.updateGamePlayerBalanceInDB(
+    supabase,
+    gameId,
+    order.player_id,
+    newBalance,
+    Number(player.equity)
+  );
+}
 
 /**
  * Handle a single SELL limit order.
- * - Checks positions for the sell order
- * - Marks order as filled and logs execution
- * - Reduces or fully closes the position
- * - Credits player's balance with sale proceeds
+ * - Checks position size using checkPositionsForSell
+ * - Marks order filled + logs execution
+ * - Reduces/closes position
+ * - Credits player cash balance with proceeds
  *
  * @param supabase - Supabase client instance
- * @param gameId - The game ID to process
- * @param tick - The current tick number (game state)
- * @param order - The limit order row
- * @param qty - Parsed numeric quantity
- * @param fillPrice - Latest price used for filling
+ * @param gameId - Game ID
+ * @param tick - Tick number
+ * @param order - Order row
+ * @param qty - Qty
+ * @param fillPrice - Fill price (latest, and should be >= limit to get here)
  * @param posByKey - Map of open positions keyed by `${player_id}:${symbol}`
  */
 async function handleSellLimitOrder(
@@ -559,60 +571,28 @@ async function handleSellLimitOrder(
   fillPrice: number,
   posByKey: Map<string, any>
 ): Promise<void> {
-  const limitPrice = Number(order.price);
+  const canSell = await checkPositionsForSell(supabase, gameId, order.player_id, qty, order.symbol);
+  if (!canSell) {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
+  }
 
-  // Get the position for the player
   const key = `${order.player_id}:${order.symbol}`;
-  const position = posByKey.get(key);
+  const pos = posByKey.get(key);
 
-  if (!position || position.side !== "BUY") {
-    // Reject the order if there's no open position or the position is not a long (BUY)
+  if (!pos || pos.side !== "BUY" || pos.status !== "open") {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
-  const positionQty = position.quantity;
-  if (qty > positionQty) {
-    // Reject the order if the quantity to sell is greater than the position size
+  const posQty = Number(pos.quantity);
+  if (!Number.isFinite(posQty) || posQty <= 0 || qty > posQty) {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
-  // Process the sell
-  const pnl = (fillPrice - position.entry_price) * qty; // PnL calculation (entry - current price)
-  const newQty = positionQty - qty;
-
-  // Update position (reduce quantity or close position if fully sold)
-  if (newQty <= 0) {
-    await db.updatePositionInDB(supabase, position.id, {
-      status: "closed",
-      currentPrice: fillPrice,
-      unrealizedPnl: pnl, // Unrealized PnL
-    });
-
-    posByKey.delete(key); // Remove the position from the map if it's closed
-  } else {
-    await db.updatePositionInDB(supabase, position.id, {
-      quantity: newQty,
-      currentPrice: fillPrice,
-    });
-
-    position.quantity = newQty;
-    posByKey.set(key, position);
-  }
-
-  // Mark the order as filled
   await db.updateOrderInDB(supabase, order.id, "filled", fillPrice);
 
-  // Update the player's balance with the proceeds from the sell
-  const players = await db.fetchGamePlayersFromDB(supabase, gameId, order.player_id);
-  const player = players[0];
-  if (player) {
-    const newBalance = player.balance + qty * fillPrice;
-    await db.updateGamePlayerBalanceInDB(supabase, gameId, order.player_id, newBalance, player.equity);
-  }
-
-  // Log execution (audit trail)
   await db.insertOrderExecutionInDB(
     supabase,
     order.id,
@@ -624,23 +604,55 @@ async function handleSellLimitOrder(
     fillPrice,
     tick
   );
+
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId, order.player_id);
+  const player = players[0];
+  if (!player) {
+    await db.updateOrderInDB(supabase, order.id, "rejected");
+    return;
+  }
+
+  const proceeds = fillPrice * qty;
+  const newBalance = Number(player.balance) + proceeds;
+
+  await db.updateGamePlayerBalanceInDB(
+    supabase,
+    gameId,
+    order.player_id,
+    newBalance,
+    Number(player.equity)
+  );
+
+  const remainingQty = posQty - qty;
+
+  if (remainingQty <= 0) {
+    await db.updatePositionInDB(supabase, pos.id, {
+      status: "closed",
+      currentPrice: fillPrice,
+    });
+    posByKey.delete(key);
+  } else {
+    await db.updatePositionInDB(supabase, pos.id, {
+      quantity: remainingQty,
+      currentPrice: fillPrice,
+    });
+    pos.quantity = remainingQty as any;
+    posByKey.set(key, pos);
+  }
 }
 
 /**
- * Handle a single TAKE_PROFIT order.
- * - Validates order links to an open position
- * - Checks trigger condition using latest price
- * - Ensures the order does not oversell the position
- * - Fills order + logs execution
- * - Closes or partially reduces the position
- * - Credits player's balance with sale proceeds
+ * Handle a single TAKE_PROFIT order (v1 long-only).
+ * - Must link to an open BUY position
+ * - Triggers when price >= trigger_price
+ * - Executes a SELL of order.quantity (or full position if quantity is null)
  *
  * @param supabase - Supabase client instance
- * @param gameId - The game ID to process
- * @param tick - The current tick number (game state)
- * @param order - The take profit order row
+ * @param gameId - Game ID
+ * @param tick - Tick number
+ * @param order - Order row
  * @param posById - Map of open positions by position ID
- * @param priceBySymbol - Map of latest prices by symbol
+ * @param priceBySymbol - Map(symbol -> latest price)
  */
 async function handleTakeProfitOrder(
   supabase: SupabaseClient,
@@ -650,35 +662,27 @@ async function handleTakeProfitOrder(
   posById: Map<string, any>,
   priceBySymbol: Map<string, number>
 ): Promise<void> {
-  // Must link to a position
   if (!order.position_id) {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
   const pos = posById.get(order.position_id);
-  if (!pos || pos.status !== "open") {
-    await db.updateOrderInDB(supabase, order.id, "rejected");
-    return;
-  }
-
-  // Only process if the position is a long (BUY) position
-  if (pos.side !== "BUY") {
+  if (!pos || pos.status !== "open" || pos.side !== "BUY") {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
   const trigger = Number(order.trigger_price);
-  if (!Number.isFinite(trigger)) {
+  if (!Number.isFinite(trigger) || trigger <= 0) {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
   const px = priceBySymbol.get(order.symbol);
-  if (px == null) return;
+  if (px == null) return; // keep pending
 
-  // TP condition for a long: trigger when price >= take profit price
-  if (px < trigger) return;
+  if (px < trigger) return; // not hit yet
 
   const posQty = Number(pos.quantity);
   if (!Number.isFinite(posQty) || posQty <= 0) {
@@ -687,17 +691,11 @@ async function handleTakeProfitOrder(
   }
 
   const orderQty = order.quantity == null ? posQty : Number(order.quantity);
-  if (!Number.isFinite(orderQty) || orderQty <= 0) {
+  if (!Number.isFinite(orderQty) || orderQty <= 0 || orderQty > posQty) {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
-  if (orderQty > posQty) {
-    await db.updateOrderInDB(supabase, order.id, "rejected");
-    return;
-  }
-
-  // Fetch the player and update balance
   const players = await db.fetchGamePlayersFromDB(supabase, gameId, order.player_id);
   const player = players[0];
   if (!player) {
@@ -705,10 +703,8 @@ async function handleTakeProfitOrder(
     return;
   }
 
-  // 1) Fill order at current price
   await db.updateOrderInDB(supabase, order.id, "filled", px);
 
-  // 2) Execution log
   await db.insertOrderExecutionInDB(
     supabase,
     order.id,
@@ -721,53 +717,51 @@ async function handleTakeProfitOrder(
     tick
   );
 
-  // 3) Close (or reduce) position
   const entry = Number(pos.entry_price);
   const pnl = (px - entry) * orderQty;
 
-  if (orderQty === posQty) {
-    // full close
+  const remainingQty = posQty - orderQty;
+
+  if (remainingQty <= 0) {
     await db.updatePositionInDB(supabase, pos.id, {
       status: "closed",
       currentPrice: px,
       unrealizedPnl: pnl,
     });
-
     posById.delete(pos.id);
   } else {
-    const remainingQty = posQty - orderQty;
     await db.updatePositionInDB(supabase, pos.id, {
       quantity: remainingQty,
       currentPrice: px,
     });
-
     pos.quantity = remainingQty as any;
     posById.set(pos.id, pos);
   }
 
-  // 4) Credit cash balance with proceeds
   const proceeds = px * orderQty;
   const newBalance = Number(player.balance) + proceeds;
 
-  await db.updateGamePlayerBalanceInDB(supabase, gameId, order.player_id, newBalance, Number(player.equity));
+  await db.updateGamePlayerBalanceInDB(
+    supabase,
+    gameId,
+    order.player_id,
+    newBalance,
+    Number(player.equity)
+  );
 }
 
-
 /**
- * Handle a single STOP_LOSS order.
- * - Validates order links to an open position
- * - Checks trigger condition using latest price
- * - Ensures the order does not oversell the position
- * - Fills order + logs execution
- * - Closes or partially reduces the position
- * - Credits player's balance with sale proceeds
+ * Handle a single STOP_LOSS order (v1 long-only).
+ * - Must link to an open BUY position
+ * - Triggers when price <= trigger_price
+ * - Executes a SELL of order.quantity (or full position if quantity is null)
  *
  * @param supabase - Supabase client instance
- * @param gameId - The game ID to process
- * @param tick - The current tick number (game state)
- * @param order - The stop loss order row
+ * @param gameId - Game ID
+ * @param tick - Tick number
+ * @param order - Order row
  * @param posById - Map of open positions by position ID
- * @param priceBySymbol - Map of latest prices by symbol
+ * @param priceBySymbol - Map(symbol -> latest price)
  */
 async function handleStopLossOrder(
   supabase: SupabaseClient,
@@ -777,35 +771,27 @@ async function handleStopLossOrder(
   posById: Map<string, any>,
   priceBySymbol: Map<string, number>
 ): Promise<void> {
-  // Must link to a position
   if (!order.position_id) {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
   const pos = posById.get(order.position_id);
-  if (!pos || pos.status !== "open") {
-    await db.updateOrderInDB(supabase, order.id, "rejected");
-    return;
-  }
-
-  // Only process if the position is a long (BUY) position
-  if (pos.side !== "BUY") {
+  if (!pos || pos.status !== "open" || pos.side !== "BUY") {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
   const trigger = Number(order.trigger_price);
-  if (!Number.isFinite(trigger)) {
+  if (!Number.isFinite(trigger) || trigger <= 0) {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
   const px = priceBySymbol.get(order.symbol);
-  if (px == null) return;
+  if (px == null) return; // keep pending
 
-  // SL condition for a long: trigger when price <= stop loss price
-  if (px > trigger) return;
+  if (px > trigger) return; // not hit yet
 
   const posQty = Number(pos.quantity);
   if (!Number.isFinite(posQty) || posQty <= 0) {
@@ -814,17 +800,11 @@ async function handleStopLossOrder(
   }
 
   const orderQty = order.quantity == null ? posQty : Number(order.quantity);
-  if (!Number.isFinite(orderQty) || orderQty <= 0) {
+  if (!Number.isFinite(orderQty) || orderQty <= 0 || orderQty > posQty) {
     await db.updateOrderInDB(supabase, order.id, "rejected");
     return;
   }
 
-  if (orderQty > posQty) {
-    await db.updateOrderInDB(supabase, order.id, "rejected");
-    return;
-  }
-
-  // Fetch the player and update balance
   const players = await db.fetchGamePlayersFromDB(supabase, gameId, order.player_id);
   const player = players[0];
   if (!player) {
@@ -832,10 +812,8 @@ async function handleStopLossOrder(
     return;
   }
 
-  // 1) Fill order at current price
   await db.updateOrderInDB(supabase, order.id, "filled", px);
 
-  // 2) Execution log
   await db.insertOrderExecutionInDB(
     supabase,
     order.id,
@@ -848,34 +826,183 @@ async function handleStopLossOrder(
     tick
   );
 
-  // 3) Close (or reduce) position
   const entry = Number(pos.entry_price);
   const pnl = (px - entry) * orderQty;
 
-  if (orderQty === posQty) {
-    // full close
+  const remainingQty = posQty - orderQty;
+
+  if (remainingQty <= 0) {
     await db.updatePositionInDB(supabase, pos.id, {
       status: "closed",
       currentPrice: px,
       unrealizedPnl: pnl,
     });
-
     posById.delete(pos.id);
   } else {
-    const remainingQty = posQty - orderQty;
     await db.updatePositionInDB(supabase, pos.id, {
       quantity: remainingQty,
       currentPrice: px,
-      
     });
-
     pos.quantity = remainingQty as any;
     posById.set(pos.id, pos);
   }
 
-  // 4) Credit cash balance with proceeds
   const proceeds = px * orderQty;
   const newBalance = Number(player.balance) + proceeds;
 
-  await db.updateGamePlayerBalanceInDB(supabase, gameId, order.player_id, newBalance, Number(player.equity));
+  await db.updateGamePlayerBalanceInDB(
+    supabase,
+    gameId,
+    order.player_id,
+    newBalance,
+    Number(player.equity)
+  );
+}
+
+// --------------------
+// Update functions (YOUR “UPDATE” STUFF)
+// --------------------
+
+/**
+ * Update all open positions for a game with latest prices and unrealized P&L.
+ * - Loads all open positions
+ * - Loads latest price for each symbol
+ * - Computes unrealized P&L per position
+ * - Updates each position's current_price and unrealized_pnl
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID
+ */
+export async function updatePositions(
+  supabase: SupabaseClient,
+  gameId: string
+): Promise<void> {
+  const openPositions = await db.fetchPositionsFromDB(supabase, gameId, "open");
+  if (openPositions.length === 0) return;
+
+  const symbols = Array.from(new Set(openPositions.map((p: any) => p.symbol)));
+  const priceBySymbol = await getLatestPricesBySymbol(supabase, symbols);
+
+  for (const pos of openPositions) {
+    const last = priceBySymbol.get(pos.symbol);
+    if (last == null) continue;
+
+    const qty = Number(pos.quantity);
+    const entry = Number(pos.entry_price);
+    const lev = Number(pos.leverage ?? 1);
+
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    if (!Number.isFinite(entry) || entry <= 0) continue;
+    if (!Number.isFinite(lev) || lev <= 0) continue;
+
+    const unrealizedPnl =
+      pos.side === "BUY"
+        ? (last - entry) * qty * lev
+        : pos.side === "SELL"
+        ? (entry - last) * qty * lev
+        : 0;
+
+    await db.updatePositionInDB(supabase, pos.id, {
+      currentPrice: last,
+      unrealizedPnl,
+    });
+  }
+}
+
+/**
+ * Update all players' equity for a game.
+ * - Sums unrealized P&L across all open positions per player
+ * - Sets equity = balance + total unrealized P&L
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID
+ */
+export async function updatePlayerBalances(
+  supabase: SupabaseClient,
+  gameId: string
+): Promise<void> {
+  const openPositions = await db.fetchPositionsFromDB(supabase, gameId, "open");
+
+  const unrealisedByPlayer = new Map<string, number>();
+  for (const pos of openPositions) {
+    const pnl = Number(pos.unrealized_pnl ?? 0);
+    unrealisedByPlayer.set(
+      pos.player_id,
+      (unrealisedByPlayer.get(pos.player_id) ?? 0) + (Number.isFinite(pnl) ? pnl : 0)
+    );
+  }
+
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
+
+  for (const p of players) {
+    const balance = Number(p.balance ?? 0);
+    const unrealised = unrealisedByPlayer.get(p.user_id) ?? 0;
+    const equity = balance + unrealised;
+
+    await db.updateGamePlayerBalanceInDB(supabase, gameId, p.user_id, balance, equity);
+  }
+}
+
+/**
+ * Record equity history for all players for a given tick.
+ * - Loads all game players
+ * - Inserts a row into equity_history for each player
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID
+ * @param tick - Tick number
+ */
+export async function updateEquityHistory(
+  supabase: SupabaseClient,
+  gameId: string,
+  tick: number
+): Promise<void> {
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
+  if (players.length === 0) return;
+
+  for (const p of players) {
+    const balance = Number(p.balance);
+    const equity = Number(p.equity);
+
+    await db.insertEquityHistoryInDB(supabase, gameId, p.user_id, tick, balance, equity);
+  }
+}
+
+// --------------------
+// Orchestrator
+// --------------------
+
+/**
+ * Process a game tick for a single game.
+ *
+ * Order (recommended):
+ * 1) Market orders
+ * 2) Limit orders
+ * 3) Update positions (mark-to-market)
+ * 4) Update equity
+ * 5) Conditional orders (TP/SL)
+ * 6) Record equity history
+ *
+ * @param gameId - Game ID
+ * @param gameState - Tick number
+ * @param supabase - Supabase client instance
+ */
+export async function processGameTick(
+  gameId: string,
+  gameState: number,
+  supabase: SupabaseClient
+): Promise<void> {
+  console.log(`Processing game tick for game ${gameId} at game state ${gameState}`);
+
+  await processMarketOrders(supabase, gameId, gameState);
+  await processLimitOrders(supabase, gameId, gameState);
+
+  await updatePositions(supabase, gameId);
+  await updatePlayerBalances(supabase, gameId);
+
+  await processConditionalOrders(supabase, gameId, gameState);
+
+  await updateEquityHistory(supabase, gameId, gameState);
+
+  console.log(`Completed game tick processing for game ${gameId}`);
 }
