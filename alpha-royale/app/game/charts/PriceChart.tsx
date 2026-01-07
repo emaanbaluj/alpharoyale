@@ -55,24 +55,24 @@ export const PriceChart: React.FC<PriceChartProps> = ({ data1, data2 = [], showD
         width: container.clientWidth,
         height: container.clientHeight,
         layout: {
-            background: { type: ColorType.Solid, color: '#111827' },
+            background: { type: ColorType.Solid, color: '#0a0b0d' },
             textColor: '#9CA3AF',
         },
         grid: {
-            vertLines: { color: '#374151' },
-            horzLines: { color: '#374151' },
+            vertLines: { color: '#1e1f25' },
+            horzLines: { color: '#1e1f25' },
         },
-        rightPriceScale: { borderColor: '#374151' },
-        timeScale: { borderColor: '#374151' },
+        rightPriceScale: { borderColor: '#1e1f25' },
+        timeScale: { borderColor: '#1e1f25' },
         });
 
         const series1 = chart.addSeries(LineSeries, {
-            color: '#3B82F6',
+            color: '#10b981',
             lineWidth: 2,
         });
 
         const series2 = chart.addSeries(LineSeries, {
-            color: '#10B981',
+            color: '#3b82f6',
             lineWidth: 2,
         });
 

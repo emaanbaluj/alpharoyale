@@ -1,10 +1,13 @@
 'use client';
 import { useState, useEffect, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
+import Image from 'next/image';
+import toast from 'react-hot-toast';
 import { supabase } from '../auth/supabaseClient/supabaseClient';
 import { orderAPI, positionAPI, gameAPI, priceAPI, equityAPI } from '../lib/api';
 import { subscribeToGamePlayers, subscribeToPositions, subscribeToPrices, subscribeToEquityHistory } from '../lib/subscriptions';
 import { PriceChart } from './charts/PriceChart';
+import { CandlestickChart } from './charts/CandlestickChart';
 
 interface Position {
   id: string;
@@ -45,6 +48,7 @@ const COMPATIBLETICKERS = ["ETH", "BTC", "AAPL"] as const;
 type CompatibleTickers = (typeof COMPATIBLETICKERS)[number];
 
 function GamePageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const gameId = searchParams.get('id');
 
@@ -94,6 +98,20 @@ function GamePageContent() {
   const [editTriggerPrice, setEditTriggerPrice] = useState('');
   const [editQuantity, setEditQuantity] = useState('');
   const selectedPosition = positions.find(p => p.id === selectedPositionId);
+
+  // Timer state
+  const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
+  const [gameEndTime, setGameEndTime] = useState<Date | null>(null);
+
+  // Price change tracking
+  const [previousPrices, setPreviousPrices] = useState<Record<string, number>>({});
+  const [priceChanges, setPriceChanges] = useState<Record<string, number>>({});
+
+  // Chart type
+  const [chartType, setChartType] = useState<'line' | 'candle'>('line');
+
+  // Previous PNL for animation
+  const [previousPnl, setPreviousPnl] = useState<Record<string, number>>({});
 
   // Load price history for selected ticker
   useEffect(() => {
@@ -148,10 +166,36 @@ function GamePageContent() {
   async function loadLatestPrices() {
     const { prices } = await priceAPI.getLatestPrices();
     if (prices) {
+      // Track price changes
+      const changes: Record<string, number> = {};
+      Object.keys(prices).forEach(ticker => {
+        if (previousPrices[ticker]) {
+          changes[ticker] = prices[ticker] - previousPrices[ticker];
+        }
+      });
+      setPriceChanges(changes);
+      setPreviousPrices(prices);
       setLatestPrices(prices);
     }
   }
   
+  // Timer effect
+  useEffect(() => {
+    if (!gameEndTime) return;
+
+    const updateTimer = () => {
+      const now = new Date().getTime();
+      const end = gameEndTime.getTime();
+      const remaining = Math.max(0, Math.floor((end - now) / 1000));
+      setTimeRemaining(remaining);
+    };
+
+    updateTimer();
+    const timerInterval = setInterval(updateTimer, 1000);
+
+    return () => clearInterval(timerInterval);
+  }, [gameEndTime]);
+
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (user) {
@@ -222,6 +266,23 @@ function GamePageContent() {
 
   async function loadGameData(gId: string, uId: string) {
     const { game, players } = await gameAPI.getGame(gId);
+    
+    // Set game end time for timer
+    if (game && game.started_at && game.duration_minutes) {
+      const startTime = new Date(game.started_at);
+      const endTime = new Date(startTime.getTime() + game.duration_minutes * 60000);
+      console.log('Game timer debug:', {
+        started_at: game.started_at,
+        duration_minutes: game.duration_minutes,
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString(),
+        now: new Date().toISOString()
+      });
+      setGameEndTime(endTime);
+    } else {
+      console.log('Missing game timer data:', { game, started_at: game?.started_at, duration_minutes: game?.duration_minutes });
+    }
+    
     if (players) {
       const me = players.find((p: any) => p.user_id === uId);
       const opponent = players.find((p: any) => p.user_id !== uId);
@@ -246,6 +307,13 @@ function GamePageContent() {
   async function loadPositions(gId: string, uId: string) {
     const { positions: pos } = await positionAPI.getPositions(gId, uId);
     if (pos) {
+      // Track PnL changes for animation
+      const newPnlMap: Record<string, number> = {};
+      pos.forEach((p: { id: string | number; unrealized_pnl: number; }) => {
+        newPnlMap[p.id] = p.unrealized_pnl;
+      });
+      setPreviousPnl(newPnlMap);
+      
       setPositions(pos);
       // Load TP/SL orders for all positions to display status
       for (const position of pos) {
@@ -290,12 +358,12 @@ function GamePageContent() {
     if (!gameId || !userId) return;
 
     if (!amount) {
-      alert('Please enter a quantity');
+      toast.error('Please enter a quantity');
       return;
     }
 
     if (orderType === 'LIMIT' && !limitPrice) {
-      alert('Please enter a limit price');
+      toast.error('Please enter a limit price');
       return;
     }
 
@@ -314,7 +382,7 @@ function GamePageContent() {
       });
 
       if (!result.order) {
-        alert('Failed to place order: ' + result.error);
+        toast.error('Failed to place order: ' + result.error);
         setLoading(false);
         return;
       }
@@ -322,9 +390,9 @@ function GamePageContent() {
       // Reset form
       setAmount('');
       setLimitPrice('');
-      alert('Order placed! Click "Process Orders" to execute it.');
+      toast.success('Order placed! Click "Process Orders" to execute it.');
     } catch (error: any) {
-      alert('Error placing order: ' + error.message);
+      toast.error('Error placing order: ' + error.message);
     }
 
     setLoading(false);
@@ -332,10 +400,6 @@ function GamePageContent() {
 
   async function handleCancelOrder(orderId: string) {
     if (!userId) return;
-    
-    if (!confirm('Are you sure you want to cancel this order?')) {
-      return;
-    }
 
     setLoading(true);
     const result = await orderAPI.cancelOrder(orderId, userId);
@@ -343,8 +407,9 @@ function GamePageContent() {
 
     if (result.order) {
       loadOrders(gameId!, userId);
+      toast.success('Order cancelled');
     } else {
-      alert('Failed to cancel order: ' + result.error);
+      toast.error('Failed to cancel order: ' + result.error);
     }
   }
 
@@ -383,7 +448,7 @@ function GamePageContent() {
     const quantity = type === 'TAKE_PROFIT' ? newTpQuantity : newSlQuantity;
 
     if (!triggerPrice) {
-      alert('Please enter a trigger price');
+      toast.error('Please enter a trigger price');
       return;
     }
 
@@ -410,22 +475,18 @@ function GamePageContent() {
           setNewSlTriggerPrice('');
           setNewSlQuantity('');
         }
-        alert(`${type === 'TAKE_PROFIT' ? 'Take Profit' : 'Stop Loss'} order created successfully`);
+        toast.success(`${type === 'TAKE_PROFIT' ? 'Take Profit' : 'Stop Loss'} order created successfully`);
       } else {
-        alert('Failed to create order: ' + result.error);
+        toast.error('Failed to create order: ' + result.error);
       }
     } catch (error: any) {
-      alert('Error creating order: ' + error.message);
+      toast.error('Error creating order: ' + error.message);
     }
     setLoading(false);
   }
 
   async function handleDeleteTpSl(orderId: string) {
     if (!userId) return;
-    
-    if (!confirm('Are you sure you want to cancel this TP/SL order?')) {
-      return;
-    }
 
     setLoading(true);
     const result = await orderAPI.cancelOrder(orderId, userId);
@@ -433,9 +494,9 @@ function GamePageContent() {
 
     if (result.order && selectedPositionForTpSl) {
       await loadTpSlOrdersForPosition(selectedPositionForTpSl);
-      alert('TP/SL order cancelled');
+      toast.success('TP/SL order cancelled');
     } else {
-      alert('Failed to cancel order: ' + result.error);
+      toast.error('Failed to cancel order: ' + result.error);
     }
   }
 
@@ -453,7 +514,7 @@ function GamePageContent() {
     if (!editingOrderId || !userId) return;
 
     if (!editTriggerPrice) {
-      alert('Please enter a trigger price');
+      toast.error('Please enter a trigger price');
       return;
     }
 
@@ -473,9 +534,9 @@ function GamePageContent() {
       setEditingOrderId(null);
       setEditTriggerPrice('');
       setEditQuantity('');
-      alert('TP/SL order updated successfully');
+      toast.success('TP/SL order updated successfully');
     } else {
-      alert('Failed to update order: ' + result.error);
+      toast.error('Failed to update order: ' + result.error);
     }
   }
 
@@ -504,17 +565,17 @@ function GamePageContent() {
     if (!position) return;
 
     if (!closeQuantity) {
-      alert('Please enter a quantity');
+      toast.error('Please enter a quantity');
       return;
     }
 
     if (closeOrderType === 'LIMIT' && !closeLimitPrice) {
-      alert('Please enter a limit price');
+      toast.error('Please enter a limit price');
       return;
     }
 
     if (parseFloat(closeQuantity) > parseFloat(position.quantity.toString())) {
-      alert(`Quantity cannot exceed position size: ${position.quantity}`);
+      toast.error(`Quantity cannot exceed position size: ${position.quantity}`);
       return;
     }
 
@@ -532,13 +593,13 @@ function GamePageContent() {
       });
 
       if (result.order) {
-        alert('Close order placed! Click "Process Orders" to execute it.');
+        toast.success('Close order placed! Click "Process Orders" to execute it.');
         handleCloseModal();
       } else {
-        alert('Failed to place close order: ' + result.error);
+        toast.error('Failed to place close order: ' + result.error);
       }
     } catch (error: any) {
-      alert('Error placing close order: ' + error.message);
+      toast.error('Error placing close order: ' + error.message);
     }
 
     setLoading(false);
@@ -550,171 +611,232 @@ function GamePageContent() {
       const response = await fetch('http://localhost:8787/trigger');
       const result = await response.json();
       if (result.success) {
-        alert('Orders processed! Check your positions.');
+        toast.success('Orders processed! Check your positions.');
       } else {
-        alert('Failed to process orders');
+        toast.error('Failed to process orders');
       }
     } catch (error) {
-      alert('Error processing orders: ' + error);
+      toast.error('Error processing orders: ' + error);
     }
     setLoading(false);
   }
 
 
-  if (!marketData) return <div>Loading...</div>;
+  if (!marketData) return <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
+    <div className="text-gray-400">Loading game...</div>
+  </div>;
 
   return (
-    <div className="h-screen bg-gray-900 p-6">
-      <div className="max-w-8xl mx-auto">
-        <div className="flex justify-between items-center mb-6 text-white">
-          <h1 className="text-2xl font-bold">Alpha Royale - {gameId || 'Loading...'}</h1>
-          <div className="flex gap-4">
-            <div>Your Balance: ${myBalance.toFixed(2)}</div>
-            <div>Opponent Balance: ${opponentBalance.toFixed(2)}</div>
+    <div className="h-screen bg-[#0a0b0d] flex flex-col overflow-hidden">
+      {/* Top Navigation Bar */}
+      <div className="bg-[#13141a] border-b border-[#1e1f25] px-6 py-3 flex justify-between items-center shrink-0">
+        <div className="flex items-center gap-6">
+          <button onClick={() => router.push('/home')} className="hover:opacity-80 transition-opacity">
+            <Image src="/alpha_royal_logo.png" alt="Alpha Royale" width={60} height={60} className="rounded" />
+          </button>
+          <div className="h-6 w-px bg-[#1e1f25]"></div>
+          <div className="flex items-center gap-4 text-sm">
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500">Balance:</span>
+              <span className="text-white font-mono font-semibold">${myBalance.toFixed(2)}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500">Opponent:</span>
+              <span className="text-gray-300 font-mono">${opponentBalance.toFixed(2)}</span>
+            </div>
           </div>
         </div>
+        <div className="flex items-center gap-3">
+          {/* Game Timer */}
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-[#1e1f25] rounded">
+            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {timeRemaining !== null ? (
+              <span className={`text-sm font-mono font-semibold ${
+                timeRemaining < 300 ? 'text-red-400' : timeRemaining < 600 ? 'text-yellow-400' : 'text-gray-300'
+              }`}>
+                {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}
+              </span>
+            ) : (
+              <span className="text-sm font-mono font-semibold text-gray-500">--:--</span>
+            )}
+          </div>
+        </div>
+      </div>
 
-        <div className="grid grid-cols-7 gap-6">
-          <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
-            <h3 className="font-bold mb-1 text-white">Current Prices</h3>
-            <h1 className="text-xs mb-3 text-white">Click on the ticker to view historical data in the chart</h1>
-            <div className="space-y-2 text-sm text-gray-300">
+      {/* Main Content Area */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left Sidebar - Ticker List */}
+        <div className="w-48 bg-[#13141a] border-r border-[#1e1f25] flex flex-col shrink-0">
+          <div className="px-4 py-3 border-b border-[#1e1f25]">
+            <h3 className="text-sm font-bold text-white uppercase tracking-widest">Markets</h3>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <div className="py-2">
               {COMPATIBLETICKERS.map((t) => (
-                <button key={t} onClick={() => setSelectedChartTicker(t)} className="w-full">
-                  <div className="flex justify-between w-full">
-                    <span>{t}</span>
-                    <span>${latestPrices[t]?.toFixed(2) || '-.--'}</span>
+                <button 
+                  key={t} 
+                  onClick={() => setSelectedChartTicker(t)} 
+                  className={`w-full px-4 py-2.5 flex justify-between items-center hover:bg-[#1e1f25] transition-colors ${
+                    selectedChartTicker === t ? 'bg-[#1e1f25]' : ''
+                  }`}
+                >
+                  <span className="text-white font-medium text-sm">{t}-USD</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-300 font-mono text-sm">${latestPrices[t]?.toFixed(2) || '-.--'}</span>
+                    {priceChanges[t] !== undefined && priceChanges[t] !== 0 && (
+                      <span className={`text-xs font-mono ${priceChanges[t] > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {priceChanges[t] > 0 ? '↑' : '↓'} {Math.abs(priceChanges[t]).toFixed(2)}
+                      </span>
+                    )}
                   </div>
                 </button>
               ))}
             </div>
           </div>
+        </div>
 
-          <div className="col-span-4">
-            <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
-              <h2 className="font-bold mb-2 text-white">Market Chart | {selectedChartTicker}</h2>
-              <div className="h-90 bg-gray-900 flex items-center justify-center">
-                <PriceChart data1={marketData[selectedChartTicker]?.price ?? []}/>
-              </div>
+        {/* Center - Chart Area */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="bg-[#13141a] border-b border-[#1e1f25] px-4 py-2 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <select
+                value={selectedChartTicker}
+                onChange={(e) => setSelectedChartTicker(e.target.value as CompatibleTickers)}
+                className="bg-[#1e1f25] text-white px-3 py-1.5 rounded border border-[#25262d] hover:bg-[#25262d] focus:border-blue-500 focus:outline-none font-semibold text-sm transition-colors cursor-pointer"
+              >
+                <option value="BTC">BTC-USD</option>
+                <option value="ETH">ETH-USD</option>
+                <option value="AAPL">AAPL-USD</option>
+              </select>
+              <span className="text-gray-500 text-sm">${latestPrices[selectedChartTicker]?.toFixed(2) || '-.--'}</span>
+            </div>
+            <div className="flex items-center gap-1 bg-[#1e1f25] p-1 rounded">
+              <button
+                onClick={() => setChartType('line')}
+                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                  chartType === 'line' ? 'bg-blue-500 text-white' : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Line
+              </button>
+              <button
+                onClick={() => setChartType('candle')}
+                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                  chartType === 'candle' ? 'bg-blue-500 text-white' : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Candle
+              </button>
+            </div>
+          </div>
+          <div className="flex-1 bg-[#0a0b0d] p-4">
+            {chartType === 'line' ? (
+              <PriceChart data1={marketData[selectedChartTicker]?.price ?? []}/>
+            ) : (
+              <CandlestickChart data={marketData[selectedChartTicker]?.price ?? []}/>
+            )}
+          </div>
+
+          {/* Equity Comparison Chart */}
+          <div className="bg-[#13141a] border-t border-[#1e1f25]">
+            <div className="px-4 py-2 border-b border-[#1e1f25] flex justify-between items-center">
+              <h3 className="text-sm font-bold text-white uppercase tracking-widest">Equity Comparison</h3>
+              <button 
+                onClick={() => setShowOppEquityCurve(!showOppEquityCurve)}
+                className="text-xs px-2 py-1 bg-[#1e1f25] hover:bg-[#25262d] text-gray-300 rounded transition-colors"
+              >
+                {showOppEquityCurve ? 'Hide Opponent' : 'Show Opponent'}
+              </button>
+            </div>
+            <div className="h-32 p-4 bg-[#0a0b0d]">
+              <PriceChart data1={myEquityChartData} data2={oppEquityChartData} showData2={showOppEquityCurve}/>
+            </div>
+          </div>
+
+
+
+          {/* Tabs Section: Orders, Positions, History */}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* Tab Bar */}
+            <div className="flex border-b border-[#1e1f25] bg-[#13141a]">
+              <button
+                onClick={() => setActiveTab('orders')}
+                className={`px-4 py-2.5 text-sm font-medium transition-colors ${
+                  activeTab === 'orders'
+                    ? 'text-white border-b-2 border-blue-500'
+                    : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                Orders
+              </button>
+              <button
+                onClick={() => setActiveTab('positions')}
+                className={`px-4 py-2.5 text-sm font-medium transition-colors ${
+                  activeTab === 'positions'
+                    ? 'text-white border-b-2 border-blue-500'
+                    : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                Positions
+              </button>
+              <button
+                onClick={() => setActiveTab('history')}
+                className={`px-4 py-2.5 text-sm font-medium transition-colors ${
+                  activeTab === 'history'
+                    ? 'text-white border-b-2 border-blue-500'
+                    : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                History
+              </button>
             </div>
 
-            <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
-              <div className="flex justify-between">
-                <h2 className="font-bold mb-2 text-white">Equity Comparison</h2>
-                <button className="text-sm mb-2" onClick={() => setShowOppEquityCurve(!showOppEquityCurve)}>{showOppEquityCurve ? 'Hide Opponent' : 'Show Opponent'}</button>
-              </div>
-              <div className="h-32 bg-gray-900 flex items-center justify-center">
-                <PriceChart data1={myEquityChartData} data2={oppEquityChartData} showData2={showOppEquityCurve}/>
-              </div>
-            </div>
-
-            {/* Tabs Section: Orders, Positions, History */}
-            <div className="border border-gray-700 bg-gray-800">
-              {/* Tab Bar */}
-              <div className="flex border-b border-gray-700">
-                <button
-                  onClick={() => setActiveTab('orders')}
-                  className={`flex-1 px-4 py-2 text-sm font-medium ${
-                    activeTab === 'orders'
-                      ? 'bg-gray-700 text-white border-b-2 border-blue-500'
-                      : 'text-gray-400 hover:text-white hover:bg-gray-750'
-                  }`}
-                >
-                  Orders
-                </button>
-                <button
-                  onClick={() => setActiveTab('positions')}
-                  className={`flex-1 px-4 py-2 text-sm font-medium ${
-                    activeTab === 'positions'
-                      ? 'bg-gray-700 text-white border-b-2 border-blue-500'
-                      : 'text-gray-400 hover:text-white hover:bg-gray-750'
-                  }`}
-                >
-                  Positions
-                </button>
-                <button
-                  onClick={() => setActiveTab('history')}
-                  className={`flex-1 px-4 py-2 text-sm font-medium ${
-                    activeTab === 'history'
-                      ? 'bg-gray-700 text-white border-b-2 border-blue-500'
-                      : 'text-gray-400 hover:text-white hover:bg-gray-750'
-                  }`}
-                >
-                  History
-                </button>
-              </div>
-
-              {/* Tab Content */}
-              <div className="p-4 max-h-96 overflow-y-auto">
-                {/* Orders Tab */}
+            {/* Tab Content */}
+            <div className="flex-1 overflow-y-auto bg-[#0a0b0d]">{/* Orders Tab */}
                 {activeTab === 'orders' && (
-                  <div>
+                  <div className="p-4">
                     {orders.length === 0 ? (
-                      <div className="text-sm text-gray-500 text-center py-8">No open orders yet</div>
+                      <div className="text-sm text-gray-500 text-center py-12">No open orders</div>
                     ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b border-gray-700">
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Time</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Type</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Ticker</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Direction</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Size</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Original Size</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Order Value</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Price</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Trigger Conditions</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">TP/SL</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Status</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Cancel</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {orders.map((order) => (
-                              <tr key={order.id} className="border-b border-gray-800 hover:bg-gray-800">
-                                <td className="py-2 px-3 text-gray-300">
-                                  {order.created_at ? new Date(order.created_at).toLocaleString() : '-'}
-                                </td>
-                                <td className="py-2 px-3 text-gray-300">{order.order_type}</td>
-                                <td className="py-2 px-3 text-white font-medium">{order.symbol}</td>
-                                <td className={`py-2 px-3 ${order.side === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
+                      <div className="space-y-2">
+                        {orders.map((order) => (
+                          <div key={order.id} className="bg-[#13141a] border border-[#1e1f25] rounded p-3 hover:border-[#25262d] transition-colors">
+                            <div className="flex justify-between items-start mb-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-white font-medium">{order.symbol}</span>
+                                <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                  order.side === 'BUY' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'
+                                }`}>
                                   {order.side}
-                                </td>
-                                <td className="py-2 px-3 text-gray-300">{order.quantity}</td>
-                                <td className="py-2 px-3 text-gray-300">{order.quantity}</td>
-                                <td className="py-2 px-3 text-gray-300">
-                                  {order.price ? `${(Number(order.quantity) * Number(order.price)).toFixed(2)}` : 'Market'}
-                                </td>
-                                <td className="py-2 px-3 text-gray-300">
+                                </span>
+                                <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-900/30 text-yellow-400">
+                                  {order.order_type}
+                                </span>
+                              </div>
+                              <button
+                                onClick={() => handleCancelOrder(order.id)}
+                                className="px-2 py-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 text-xs rounded transition-colors"
+                                disabled={loading}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              <div>
+                                <span className="text-gray-500">Qty:</span>
+                                <span className="text-gray-300 ml-1 font-mono">{order.quantity}</span>
+                              </div>
+                              <div>
+                                <span className="text-gray-500">Price:</span>
+                                <span className="text-gray-300 ml-1 font-mono">
                                   {order.price ? `$${order.price}` : order.trigger_price ? `$${order.trigger_price}` : 'Market'}
-                                </td>
-                                <td className="py-2 px-3 text-gray-400">
-                                  {order.trigger_price 
-                                    ? `${order.order_type === 'TAKE_PROFIT' ? 'Price above' : 'Price below'} ${order.trigger_price}`
-                                    : 'N/A'}
-                                </td>
-                                <td className="py-2 px-3 text-gray-400">
-                                  {order.position_id ? 'View' : '--'}
-                                </td>
-                                <td className="py-2 px-3">
-                                  <span className="px-2 py-0.5 rounded bg-yellow-900 text-yellow-300 text-xs">
-                                    {order.status.toUpperCase()}
-                                  </span>
-                                </td>
-                                <td className="py-2 px-3">
-                                  <button
-                                    onClick={() => handleCancelOrder(order.id)}
-                                    className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700"
-                                    disabled={loading}
-                                  >
-                                    Cancel
-                                  </button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -722,82 +844,71 @@ function GamePageContent() {
 
                 {/* Positions Tab */}
                 {activeTab === 'positions' && (
-                  <div>
+                  <div className="p-4">
                     {positions.length === 0 ? (
-                      <div className="text-sm text-gray-500 text-center py-8">No open positions yet</div>
+                      <div className="text-sm text-gray-500 text-center py-12">No open positions</div>
                     ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b border-gray-700">
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Ticker</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Size</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Position Value</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Entry Price</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Mark Price</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">PNL (ROE %)</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">TP/SL</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {positions.map((pos) => {
-                              const positionValue = Number(pos.quantity) * Number(pos.current_price || pos.entry_price);
-                              const roePercent = pos.entry_price ? ((Number(pos.unrealized_pnl) / (Number(pos.quantity) * Number(pos.entry_price))) * 100).toFixed(2) : '0.00';
-                              return (
-                                <tr key={pos.id} className="border-b border-gray-800 hover:bg-gray-800">
-                                  <td className="py-2 px-3 text-white font-medium">{pos.symbol}</td>
-                                  <td className="py-2 px-3 text-gray-300">{pos.quantity}</td>
-                                  <td className="py-2 px-3 text-gray-300">${positionValue.toFixed(2)}</td>
-                                  <td className="py-2 px-3 text-gray-300">${pos.entry_price}</td>
-                                  <td className="py-2 px-3 text-gray-300">${pos.current_price || pos.entry_price}</td>
-                                  <td className={`py-2 px-3 ${pos.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                    ${pos.unrealized_pnl?.toFixed(2) || '0.00'} ({roePercent}%)
-                                  </td>
-                                  <td className="py-2 px-3">
-                                    {(() => {
-                                      const tpSlOrders = positionTpSlOrders[pos.id] || [];
-                                      const hasTp = tpSlOrders.some(o => o.order_type === 'TAKE_PROFIT' && (o.status === 'pending' || o.status === 'filled'));
-                                      const hasSl = tpSlOrders.some(o => o.order_type === 'STOP_LOSS' && (o.status === 'pending' || o.status === 'filled'));
-                                      const tpStatus = hasTp ? 'TP' : '-';
-                                      const slStatus = hasSl ? 'SL' : '-';
-                                      return (
-                                        <div className="flex items-center gap-2">
-                                          <span className="text-gray-300 text-xs">{tpStatus}/{slStatus}</span>
-                                          <button
-                                            onClick={() => handleOpenTpSlModal(pos.id)}
-                                            className="px-2 py-1 bg-yellow-600 text-white text-xs rounded hover:bg-yellow-700"
-                                            disabled={loading}
-                                          >
-                                            Edit
-                                          </button>
-                                        </div>
-                                      );
-                                    })()}
-                                  </td>
-                                  <td className="py-2 px-3">
-                                    <div className="flex gap-1">
-                                      <button
-                                        onClick={() => handleOpenCloseModal(pos.id, 'MARKET')}
-                                        className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700"
-                                        disabled={loading}
-                                      >
-                                        Market
-                                      </button>
-                                      <button
-                                        onClick={() => handleOpenCloseModal(pos.id, 'LIMIT')}
-                                        className="px-2 py-1 bg-orange-600 text-white text-xs rounded hover:bg-orange-700"
-                                        disabled={loading}
-                                      >
-                                        Limit
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
+                      <div className="space-y-2">
+                        {positions.map((pos) => {
+                          const positionValue = Number(pos.quantity) * Number(pos.current_price || pos.entry_price);
+                          const roePercent = pos.entry_price ? ((Number(pos.unrealized_pnl) / (Number(pos.quantity) * Number(pos.entry_price))) * 100).toFixed(2) : '0.00';
+                          const isProfitable = pos.unrealized_pnl >= 0;
+                          return (
+                            <div key={pos.id} className="bg-[#13141a] border border-[#1e1f25] rounded p-3 hover:border-[#25262d] transition-colors">
+                              <div className="flex justify-between items-start mb-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-white font-medium">{pos.symbol}</span>
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400">
+                                    {pos.side}
+                                  </span>
+                                </div>
+                                <div className="flex gap-1">
+                                  <button
+                                    onClick={() => handleOpenTpSlModal(pos.id)}
+                                    className="px-2 py-1 bg-yellow-600/20 hover:bg-yellow-600/30 text-yellow-400 text-xs rounded transition-colors"
+                                  >
+                                    TP/SL
+                                  </button>
+                                  <button
+                                    onClick={() => handleOpenCloseModal(pos.id, 'MARKET')}
+                                    className="px-2 py-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 text-xs rounded transition-colors"
+                                  >
+                                    Close
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2 text-xs mb-2">
+                                <div>
+                                  <span className="text-gray-500">Qty:</span>
+                                  <span className="text-gray-300 ml-1 font-mono">{pos.quantity}</span>
+                                </div>
+                                <div>
+                                  <span className="text-gray-500">Entry:</span>
+                                  <span className="text-gray-300 ml-1 font-mono">${pos.entry_price}</span>
+                                </div>
+                                <div>
+                                  <span className="text-gray-500">Mark:</span>
+                                  <span className="text-gray-300 ml-1 font-mono">${pos.current_price || pos.entry_price}</span>
+                                </div>
+                                <div>
+                                  <span className="text-gray-500">Value:</span>
+                                  <span className="text-gray-300 ml-1 font-mono">${positionValue.toFixed(2)}</span>
+                                </div>
+                              </div>
+                              <div className={`text-sm font-mono transition-all duration-300 ${
+                                isProfitable ? 'text-green-400' : 'text-red-400'
+                              } ${
+                                previousPnl[pos.id] !== undefined && previousPnl[pos.id] !== pos.unrealized_pnl
+                                  ? pos.unrealized_pnl > previousPnl[pos.id] 
+                                    ? 'animate-pulse-green' 
+                                    : 'animate-pulse-red'
+                                  : ''
+                              }`}>
+                                {isProfitable ? '+' : ''}${pos.unrealized_pnl?.toFixed(2) || '0.00'} ({isProfitable ? '+' : ''}{roePercent}%)
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -805,83 +916,48 @@ function GamePageContent() {
 
                 {/* History Tab */}
                 {activeTab === 'history' && (
-                  <div>
+                  <div className="p-4">
                     {allOrders.length === 0 ? (
-                      <div className="text-sm text-gray-500 text-center py-8">No order history</div>
+                      <div className="text-sm text-gray-500 text-center py-12">No order history</div>
                     ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b border-gray-700">
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Time</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Type</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Ticker</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Direction</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Size</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Filled Size</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Order Value</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Price</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Trigger Conditions</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">TP/SL</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Status</th>
-                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Order ID</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {allOrders.map((order) => {
-                              const orderValue = order.filled_price 
-                                ? (Number(order.quantity) * Number(order.filled_price)).toFixed(2)
-                                : order.price 
-                                ? (Number(order.quantity) * Number(order.price)).toFixed(2)
-                                : '-';
-                              return (
-                                <tr key={order.id} className="border-b border-gray-800 hover:bg-gray-800">
-                                  <td className="py-2 px-3 text-gray-300">
-                                    {order.created_at ? new Date(order.created_at).toLocaleString() : '-'}
-                                  </td>
-                                  <td className="py-2 px-3 text-gray-300">{order.order_type}</td>
-                                  <td className="py-2 px-3 text-white font-medium">{order.symbol}</td>
-                                  <td className={`py-2 px-3 ${order.side === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
-                                    {order.side}
-                                  </td>
-                                  <td className="py-2 px-3 text-gray-300">{order.quantity}</td>
-                                  <td className="py-2 px-3 text-gray-300">
-                                    {order.status === 'filled' ? order.quantity : '-'}
-                                  </td>
-                                  <td className="py-2 px-3 text-gray-300">{orderValue}</td>
-                                  <td className="py-2 px-3 text-gray-300">
-                                    {order.filled_price 
-                                      ? `$${order.filled_price}`
-                                      : order.price 
-                                      ? `$${order.price}`
-                                      : order.trigger_price 
-                                      ? `$${order.trigger_price}`
-                                      : 'Market'}
-                                  </td>
-                                  <td className="py-2 px-3 text-gray-400">
-                                    {order.trigger_price 
-                                      ? `${order.order_type === 'TAKE_PROFIT' ? 'Price above' : 'Price below'} ${order.trigger_price}`
-                                      : 'N/A'}
-                                  </td>
-                                  <td className="py-2 px-3 text-gray-400">
-                                    {order.position_id ? 'View' : '--'}
-                                  </td>
-                                  <td className="py-2 px-3">
-                                    <span className={`px-2 py-0.5 rounded text-xs ${
-                                      order.status === 'filled' ? 'bg-green-900 text-green-300' :
-                                      order.status === 'cancelled' ? 'bg-gray-700 text-gray-300' :
-                                      order.status === 'rejected' ? 'bg-red-900 text-red-300' :
-                                      'bg-yellow-900 text-yellow-300'
-                                    }`}>
-                                      {order.status.toUpperCase()}
-                                    </span>
-                                  </td>
-                                  <td className="py-2 px-3 text-gray-400 text-xs">{order.id.substring(0, 8)}...</td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
+                      <div className="space-y-2">
+                        {allOrders.slice().reverse().map((order) => (
+                          <div key={order.id} className="bg-[#13141a] border border-[#1e1f25] rounded p-3">
+                            <div className="flex justify-between items-start mb-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-white font-medium">{order.symbol}</span>
+                                <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                  order.side === 'BUY' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'
+                                }`}>
+                                  {order.side}
+                                </span>
+                                <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                  order.status === 'filled' ? 'bg-green-900/30 text-green-400' :
+                                  order.status === 'cancelled' ? 'bg-gray-700/30 text-gray-400' :
+                                  order.status === 'rejected' ? 'bg-red-900/30 text-red-400' :
+                                  'bg-yellow-900/30 text-yellow-400'
+                                }`}>
+                                  {order.status.toUpperCase()}
+                                </span>
+                              </div>
+                              <span className="text-xs text-gray-500">
+                                {order.created_at ? new Date(order.created_at).toLocaleTimeString() : ''}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              <div>
+                                <span className="text-gray-500">Qty:</span>
+                                <span className="text-gray-300 ml-1 font-mono">{order.quantity}</span>
+                              </div>
+                              <div>
+                                <span className="text-gray-500">Price:</span>
+                                <span className="text-gray-300 ml-1 font-mono">
+                                  {order.filled_price ? `$${order.filled_price}` : order.price ? `$${order.price}` : 'Market'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -890,94 +966,117 @@ function GamePageContent() {
             </div>
           </div>
 
-          <div className="col-span-2">
-            {/* Place Order Section */}
-            <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
-              <h3 className="font-bold mb-3 text-white">Place Order</h3>
-              
-              {/* Market/Limit Tabs */}
-              <div className="flex border-b border-gray-700 mb-4">
-                <button
-                  onClick={() => setOrderType('MARKET')}
-                  className={`flex-1 px-4 py-2 text-sm font-medium ${
-                    orderType === 'MARKET'
-                      ? 'bg-gray-700 text-white border-b-2 border-blue-500'
-                      : 'text-gray-400 hover:text-white hover:bg-gray-750'
-                  }`}
-                >
-                  Market
-                </button>
-                <button
-                  onClick={() => setOrderType('LIMIT')}
-                  className={`flex-1 px-4 py-2 text-sm font-medium ${
-                    orderType === 'LIMIT'
-                      ? 'bg-gray-700 text-white border-b-2 border-blue-500'
-                      : 'text-gray-400 hover:text-white hover:bg-gray-750'
-                  }`}
-                >
-                  Limit
-                </button>
-              </div>
-              
+        {/* Right Sidebar - Order Entry & Bottom Tabs */}
+        <div className="w-96 bg-[#13141a] border-l border-[#1e1f25] flex flex-col shrink-0">
+          {/* Order Entry Section */}
+          <div className="border-b border-[#1e1f25] p-4">
+            <h3 className="text-base font-bold text-white uppercase tracking-widest mb-4">Place Order</h3>
+            
+            {/* Market/Limit Tabs */}
+            <div className="flex border-b border-[#1e1f25] mb-4">
+              <button
+                onClick={() => setOrderType('MARKET')}
+                className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                  orderType === 'MARKET'
+                    ? 'text-white border-b-2 border-blue-500'
+                    : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                Market
+              </button>
+              <button
+                onClick={() => setOrderType('LIMIT')}
+                className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                  orderType === 'LIMIT'
+                    ? 'text-white border-b-2 border-blue-500'
+                    : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                Limit
+              </button>
+            </div>
+            
+            {/* Symbol Selection */}
+            <div className="mb-3">
+              <label className="block text-xs text-gray-500 mb-1.5">Symbol</label>
               <select
                 value={symbol}
                 onChange={(e) => setSymbol(e.target.value)}
-                className="w-full p-2 bg-gray-900 border border-gray-700 text-white mb-2"
+                className="w-full px-3 py-2 bg-[#0a0b0d] border border-[#1e1f25] text-white rounded text-sm focus:border-blue-500 focus:outline-none"
               >
                 <option>BTC</option>
                 <option>ETH</option>
                 <option>AAPL</option>
               </select>
+            </div>
 
-              {orderType === 'LIMIT' && (
+            {/* Limit Price (only for LIMIT orders) */}
+            {orderType === 'LIMIT' && (
+              <div className="mb-3">
+                <label className="block text-xs text-gray-500 mb-1.5">Limit Price</label>
                 <input
                   type="number"
-                  placeholder="Limit Price"
+                  placeholder="0.00"
                   value={limitPrice}
                   onChange={(e) => setLimitPrice(e.target.value)}
-                  className="w-full p-2 bg-gray-900 border border-gray-700 text-white mb-2"
+                  className="w-full px-3 py-2 bg-[#0a0b0d] border border-[#1e1f25] text-white rounded text-sm focus:border-blue-500 focus:outline-none font-mono"
                 />
-              )}
+              </div>
+            )}
 
+            {/* Quantity */}
+            <div className="mb-4">
+              <label className="block text-xs text-gray-500 mb-1.5">Quantity</label>
               <input
                 type="number"
-                placeholder="Quantity"
+                placeholder="0.00"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
-                className="w-full p-2 bg-gray-900 border border-gray-700 text-white mb-2"
+                className="w-full px-3 py-2 bg-[#0a0b0d] border border-[#1e1f25] text-white rounded text-sm focus:border-blue-500 focus:outline-none font-mono"
               />
+            </div>
 
-              <div className="flex gap-2 mb-2">
-                <button 
-                  onClick={() => setOrderSide('buy')}
-                  className={`flex-1 p-2 ${orderSide === 'buy' ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300'}`}
-                >
-                  Buy
-                </button>
-                <button 
-                  onClick={() => setOrderSide('sell')}
-                  className={`flex-1 p-2 ${orderSide === 'sell' ? 'bg-red-600 text-white' : 'bg-gray-700 text-gray-300'}`}
-                >
-                  Sell
-                </button>
-              </div>
-
+            {/* Buy/Sell Buttons */}
+            <div className="flex gap-2 mb-3">
               <button 
-                className="w-full p-2 mt-2 bg-blue-600 text-white disabled:opacity-50"
-                onClick={handlePlaceOrder}
-                disabled={loading || !amount}
+                onClick={() => setOrderSide('buy')}
+                className={`flex-1 py-2.5 rounded text-sm font-medium transition-colors ${
+                  orderSide === 'buy' 
+                    ? 'bg-green-600 hover:bg-green-700 text-white' 
+                    : 'bg-[#1e1f25] hover:bg-[#25262d] text-gray-400'
+                }`}
               >
-                {loading ? 'Placing...' : 'Submit Order'}
+                Buy
               </button>
-              
               <button 
-                className="w-full p-2 mt-2 bg-purple-600 text-white disabled:opacity-50"
-                onClick={handleProcessOrders}
-                disabled={loading}
+                onClick={() => setOrderSide('sell')}
+                className={`flex-1 py-2.5 rounded text-sm font-medium transition-colors ${
+                  orderSide === 'sell' 
+                    ? 'bg-red-600 hover:bg-red-700 text-white' 
+                    : 'bg-[#1e1f25] hover:bg-[#25262d] text-gray-400'
+                }`}
               >
-                {loading ? 'Processing...' : 'Process Orders'}
+                Sell
               </button>
             </div>
+
+            {/* Submit Order Button */}
+            <button 
+              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed mb-2"
+              onClick={handlePlaceOrder}
+              disabled={loading || !amount}
+            >
+              {loading ? 'Placing...' : 'Place Order'}
+            </button>
+            
+            {/* Process Orders Button */}
+            <button 
+              className="w-full py-2.5 bg-[#1e1f25] hover:bg-[#25262d] text-white rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={handleProcessOrders}
+              disabled={loading}
+            >
+              {loading ? 'Processing...' : 'Process Orders'}
+            </button>
           </div>
         </div>
       </div>
@@ -1010,7 +1109,7 @@ function GamePageContent() {
               <h3 className="text-lg font-semibold text-white mb-3">Existing TP/SL Orders</h3>
               {selectedPositionForTpSl && positionTpSlOrders[selectedPositionForTpSl] && positionTpSlOrders[selectedPositionForTpSl].length > 0 ? (
                 <div className="space-y-2">
-                  {positionTpSlOrders[selectedPositionForTpSl].map((order) => (
+                  {positionTpSlOrders[selectedPositionForTpSl].map((order: Order) => (
                     <div key={order.id} className="p-3 bg-gray-900 rounded border border-gray-700">
                       {editingOrderId === order.id ? (
                         <div className="space-y-2">
@@ -1039,7 +1138,7 @@ function GamePageContent() {
                           <div className="flex gap-2">
                             <button
                               onClick={handleSaveTpSlEdit}
-                              className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                              className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors"
                               disabled={loading}
                             >
                               Save
@@ -1050,7 +1149,7 @@ function GamePageContent() {
                                 setEditTriggerPrice('');
                                 setEditQuantity('');
                               }}
-                              className="px-3 py-1 bg-gray-600 text-white text-sm rounded hover:bg-gray-700"
+                              className="px-3 py-1 bg-[#1e1f25] hover:bg-[#25262d] text-white text-sm rounded transition-colors"
                             >
                               Cancel
                             </button>
@@ -1076,13 +1175,13 @@ function GamePageContent() {
                               <>
                                 <button
                                   onClick={() => handleEditTpSlOrder(order.id)}
-                                  className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                                  className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded transition-colors"
                                 >
                                   Edit
                                 </button>
                                 <button
                                   onClick={() => handleDeleteTpSl(order.id)}
-                                  className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700"
+                                  className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition-colors"
                                   disabled={loading}
                                 >
                                   Cancel
@@ -1120,7 +1219,7 @@ function GamePageContent() {
                 />
                 <button
                   onClick={() => handleCreateTpSl('TAKE_PROFIT')}
-                  className="w-full px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                  className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition-colors disabled:opacity-50"
                   disabled={loading || !newTpTriggerPrice}
                 >
                   Create Take Profit
@@ -1148,7 +1247,7 @@ function GamePageContent() {
                 />
                 <button
                   onClick={() => handleCreateTpSl('STOP_LOSS')}
-                  className="w-full px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+                  className="w-full px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded transition-colors disabled:opacity-50"
                   disabled={loading || !newSlTriggerPrice}
                 >
                   Create Stop Loss
@@ -1159,7 +1258,7 @@ function GamePageContent() {
             <div className="flex justify-end">
               <button
                 onClick={handleCloseTpSlModal}
-                className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+                className="px-4 py-2 bg-[#1e1f25] hover:bg-[#25262d] text-white rounded transition-colors"
               >
                 Close
               </button>
@@ -1194,6 +1293,8 @@ function GamePageContent() {
             <div className="space-y-4">
               {(() => {
                 const position = positions.find(p => p.id === selectedPositionForClose);
+                if (!position) return null;
+                
                 if (!position) return null;
                 
                 return (
@@ -1234,14 +1335,14 @@ function GamePageContent() {
                     <div className="flex gap-2 pt-4">
                       <button
                         onClick={handleClosePositionSubmit}
-                        className="flex-1 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                        className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded transition-colors disabled:opacity-50"
                         disabled={loading || !closeQuantity || (closeOrderType === 'LIMIT' && !closeLimitPrice)}
                       >
                         {loading ? 'Placing...' : 'Place Close Order'}
                       </button>
                       <button
                         onClick={handleCloseModal}
-                        className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+                        className="px-4 py-2 bg-[#1e1f25] hover:bg-[#25262d] text-white rounded transition-colors"
                       >
                         Cancel
                       </button>
