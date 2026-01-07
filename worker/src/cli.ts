@@ -258,11 +258,11 @@ async function createOrderInteractive(
         validate: (value) => value > 0 || "Quantity must be greater than 0",
       },
       {
-        type: (prev) => (prev === "LIMIT" || prev === "TAKE_PROFIT" || prev === "STOP_LOSS") ? "number" : null,
+        type: (prev, values) => (values.orderType === "LIMIT") ? "number" : null,
         name: "price",
         message: "Price (for LIMIT orders)",
-        validate: (value, prev) => {
-          if (prev === "LIMIT" && (!value || value <= 0)) {
+        validate: (value, prev, values) => {
+          if (values.orderType === "LIMIT" && (!value || value <= 0)) {
             return "Price is required for LIMIT orders";
           }
           return true;

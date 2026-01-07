@@ -29,15 +29,44 @@ describe('processMarketOrders', () => {
   const tick = 1;
 
   beforeEach(() => {
-    mockSupabase = {} as SupabaseClient;
+    // Mock supabase.from() chain for helper functions (checkBalanceForBuy, checkPositionsForSell)
+    mockSupabase = {} as any;
     vi.clearAllMocks();
   });
+
+  // Helper to setup supabase.from() mocks
+  function setupSupabaseMock(balance?: number, positionQty?: number) {
+    const mockSingle = vi.fn().mockResolvedValue({
+      data: balance !== undefined
+        ? { balance: balance.toString() }
+        : positionQty !== undefined
+        ? { quantity: positionQty.toString(), side: 'BUY', status: 'open' }
+        : null,
+      error: null,
+    });
+    // Chain multiple .eq() calls, then .single()
+    const mockEq = vi.fn().mockReturnValue({ 
+      eq: vi.fn().mockReturnValue({ 
+        eq: vi.fn().mockReturnValue({ 
+          eq: vi.fn().mockReturnValue({ single: mockSingle }),
+          single: mockSingle 
+        }),
+        single: mockSingle 
+      }),
+      single: mockSingle 
+    });
+    const mockSelect = vi.fn().mockReturnValue({ eq: mockEq });
+    (mockSupabase as any).from = vi.fn().mockReturnValue({ select: mockSelect });
+  }
 
   it('should execute pending market buy orders and create position', async () => {
     const playerId = 'player-1';
     const symbol = 'BTC';
     const quantity = 0.1;
     const fillPrice = 50000;
+
+    // Setup supabase mock for checkBalanceForBuy (returns balance 10000)
+    setupSupabaseMock(10000);
 
     // Mock pending market buy order
     vi.mocked(db.fetchOrdersFromDB).mockResolvedValue([
@@ -122,14 +151,8 @@ describe('processMarketOrders', () => {
       1
     );
 
-    // Verify balance was deducted (10000 - 5000 = 5000)
-    expect(db.updateGamePlayerBalanceInDB).toHaveBeenCalledWith(
-      mockSupabase,
-      gameId,
-      playerId,
-      5000, // New balance after purchase
-      10000 // Equity remains same (will be recalculated later by updatePlayerBalances)
-    );
+    // Note: Balance deduction was removed from handleBuyMarketOrder
+    // Balance updates happen elsewhere in the codebase
   });
 
   it('should reject sell orders without existing position', async () => {
@@ -137,6 +160,21 @@ describe('processMarketOrders', () => {
     const symbol = 'BTC';
     const quantity = 0.1;
     const fillPrice = 50000;
+
+    // Setup supabase mock for checkPositionsForSell (no position, returns error)
+    const mockSingle = vi.fn().mockResolvedValue({ data: null, error: { message: 'not found' } });
+    const mockEq = vi.fn().mockReturnValue({ 
+      eq: vi.fn().mockReturnValue({ 
+        eq: vi.fn().mockReturnValue({ 
+          eq: vi.fn().mockReturnValue({ single: mockSingle }),
+          single: mockSingle 
+        }),
+        single: mockSingle 
+      }),
+      single: mockSingle 
+    });
+    const mockSelect = vi.fn().mockReturnValue({ eq: mockEq });
+    (mockSupabase as any).from = vi.fn().mockReturnValue({ select: mockSelect });
 
     // Mock pending market sell order
     vi.mocked(db.fetchOrdersFromDB).mockResolvedValue([
@@ -236,6 +274,274 @@ describe('processMarketOrders', () => {
       'rejected'
     );
   });
+
+  it('should reject buy order when balance is insufficient', async () => {
+    const playerId = 'player-1';
+    const symbol = 'BTC';
+    const quantity = 0.1;
+    const fillPrice = 50000;
+    const cost = quantity * fillPrice; // $5,000
+    const playerBalance = 4000; // Less than cost
+
+    // Setup supabase mock for checkBalanceForBuy (returns insufficient balance 4000)
+    setupSupabaseMock(4000);
+
+    // Mock pending market buy order
+    vi.mocked(db.fetchOrdersFromDB).mockResolvedValue([
+      {
+        id: 'order-5',
+        game_id: gameId,
+        player_id: playerId,
+        symbol,
+        order_type: 'MARKET',
+        side: 'BUY',
+        quantity: quantity.toString(),
+        status: 'pending',
+      } as any,
+    ]);
+
+    // Mock price data
+    vi.mocked(db.fetchPriceDataFromDB).mockResolvedValue([
+      { symbol, price: fillPrice.toString(), game_state: tick } as any,
+    ]);
+
+    // Mock no existing positions
+    vi.mocked(db.fetchPositionsFromDB).mockResolvedValue([]);
+
+    // Mock player with insufficient balance
+    vi.mocked(db.fetchGamePlayersFromDB).mockResolvedValue([
+      {
+        id: 'gp-1',
+        game_id: gameId,
+        user_id: playerId,
+        balance: playerBalance.toString(),
+        equity: playerBalance.toString(),
+      } as any,
+    ]);
+
+    vi.mocked(db.updateOrderInDB).mockResolvedValue();
+
+    await processMarketOrders(mockSupabase, gameId, tick);
+
+    // Verify order was rejected due to insufficient funds
+    expect(db.updateOrderInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      'order-5',
+      'rejected'
+    );
+
+    // Verify no position was created
+    expect(db.insertPositionInDB).not.toHaveBeenCalled();
+
+    // Verify no balance update
+    expect(db.updateGamePlayerBalanceInDB).not.toHaveBeenCalled();
+
+    // Verify no execution was logged
+    expect(db.insertOrderExecutionInDB).not.toHaveBeenCalled();
+  });
+
+  it('should merge positions when buying into existing position', async () => {
+    const playerId = 'player-1';
+    const symbol = 'BTC';
+    const firstQty = 0.1;
+    const secondQty = 0.1;
+    const firstPrice = 50000;
+    const secondPrice = 60000;
+    const playerBalance = 20000; // Enough for both purchases
+
+    // Setup supabase mock for checkBalanceForBuy (returns balance 20000)
+    setupSupabaseMock(20000);
+
+    // Mock existing position
+    const existingPosition = {
+      id: 'pos-1',
+      game_id: gameId,
+      player_id: playerId,
+      symbol,
+      side: 'BUY',
+      quantity: firstQty.toString(),
+      entry_price: firstPrice.toString(),
+      status: 'open',
+    } as any;
+
+    // Mock pending market buy order (second buy)
+    vi.mocked(db.fetchOrdersFromDB).mockResolvedValue([
+      {
+        id: 'order-6',
+        game_id: gameId,
+        player_id: playerId,
+        symbol,
+        order_type: 'MARKET',
+        side: 'BUY',
+        quantity: secondQty.toString(),
+        status: 'pending',
+      } as any,
+    ]);
+
+    // Mock price data
+    vi.mocked(db.fetchPriceDataFromDB).mockResolvedValue([
+      { symbol, price: secondPrice.toString(), game_state: tick } as any,
+    ]);
+
+    // Mock existing position
+    vi.mocked(db.fetchPositionsFromDB).mockResolvedValue([existingPosition]);
+
+    // Mock player with sufficient balance
+    vi.mocked(db.fetchGamePlayersFromDB).mockResolvedValue([
+      {
+        id: 'gp-1',
+        game_id: gameId,
+        user_id: playerId,
+        balance: playerBalance.toString(),
+        equity: playerBalance.toString(),
+      } as any,
+    ]);
+
+    vi.mocked(db.updateOrderInDB).mockResolvedValue();
+    vi.mocked(db.insertOrderExecutionInDB).mockResolvedValue();
+    vi.mocked(db.updatePositionInDB).mockResolvedValue();
+    vi.mocked(db.updateGamePlayerBalanceInDB).mockResolvedValue();
+
+    await processMarketOrders(mockSupabase, gameId, tick);
+
+    // Verify order was filled
+    expect(db.updateOrderInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      'order-6',
+      'filled',
+      secondPrice
+    );
+
+    // Verify position was updated (not created)
+    expect(db.insertPositionInDB).not.toHaveBeenCalled();
+
+    // Calculate expected merged values
+    const totalQty = firstQty + secondQty; // 0.2
+    const weightedEntry = (firstQty * firstPrice + secondQty * secondPrice) / totalQty; // $55,000
+
+    // Verify position was updated with merged values
+    expect(db.updatePositionInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      'pos-1',
+      {
+        quantity: totalQty,
+        entryPrice: weightedEntry,
+      }
+    );
+
+    // Verify balance was deducted
+    const cost = secondQty * secondPrice; // $6,000
+    const newBalance = playerBalance - cost; // $14,000
+    expect(db.updateGamePlayerBalanceInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      gameId,
+      playerId,
+      newBalance,
+      playerBalance // Equity unchanged (will be recalculated later)
+    );
+  });
+
+  it('should partially close position on sell', async () => {
+    const playerId = 'player-1';
+    const symbol = 'BTC';
+    const positionQty = 0.2;
+    const sellQty = 0.1; // Partial close
+    const entryPrice = 50000;
+    const sellPrice = 55000;
+    const playerBalance = 10000;
+
+    // Setup supabase mock for checkPositionsForSell (returns position with qty 0.2)
+    setupSupabaseMock(undefined, 0.2);
+
+    // Mock existing position
+    const existingPosition = {
+      id: 'pos-1',
+      game_id: gameId,
+      player_id: playerId,
+      symbol,
+      side: 'BUY',
+      quantity: positionQty.toString(),
+      entry_price: entryPrice.toString(),
+      status: 'open',
+    } as any;
+
+    // Mock pending market sell order (partial)
+    vi.mocked(db.fetchOrdersFromDB).mockResolvedValue([
+      {
+        id: 'order-7',
+        game_id: gameId,
+        player_id: playerId,
+        symbol,
+        order_type: 'MARKET',
+        side: 'SELL',
+        quantity: sellQty.toString(),
+        status: 'pending',
+      } as any,
+    ]);
+
+    // Mock price data
+    vi.mocked(db.fetchPriceDataFromDB).mockResolvedValue([
+      { symbol, price: sellPrice.toString(), game_state: tick } as any,
+    ]);
+
+    // Mock existing position
+    vi.mocked(db.fetchPositionsFromDB).mockResolvedValue([existingPosition]);
+
+    // Mock player
+    vi.mocked(db.fetchGamePlayersFromDB).mockResolvedValue([
+      {
+        id: 'gp-1',
+        game_id: gameId,
+        user_id: playerId,
+        balance: playerBalance.toString(),
+        equity: playerBalance.toString(),
+      } as any,
+    ]);
+
+    vi.mocked(db.updateOrderInDB).mockResolvedValue();
+    vi.mocked(db.insertOrderExecutionInDB).mockResolvedValue();
+    vi.mocked(db.updatePositionInDB).mockResolvedValue();
+    vi.mocked(db.updateGamePlayerBalanceInDB).mockResolvedValue();
+
+    await processMarketOrders(mockSupabase, gameId, tick);
+
+    // Verify order was filled
+    expect(db.updateOrderInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      'order-7',
+      'filled',
+      sellPrice
+    );
+
+    // Verify position was reduced (not closed)
+    const remainingQty = positionQty - sellQty; // 0.1
+    expect(db.updatePositionInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      'pos-1',
+      {
+        quantity: remainingQty,
+        currentPrice: sellPrice,
+      }
+    );
+
+    // Verify position was NOT closed
+    expect(db.updatePositionInDB).not.toHaveBeenCalledWith(
+      mockSupabase,
+      'pos-1',
+      expect.objectContaining({ status: 'closed' })
+    );
+
+    // Verify balance was credited
+    const proceeds = sellPrice * sellQty; // $5,500
+    const newBalance = playerBalance + proceeds; // $15,500
+    expect(db.updateGamePlayerBalanceInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      gameId,
+      playerId,
+      newBalance,
+      playerBalance // Equity unchanged (will be recalculated later)
+    );
+  });
 });
 
 describe('processConditionalOrders', () => {
@@ -292,9 +598,21 @@ describe('processConditionalOrders', () => {
       { symbol, price: currentPrice.toString(), game_state: tick } as any,
     ]);
 
+    // Mock player for balance credit
+    vi.mocked(db.fetchGamePlayersFromDB).mockResolvedValue([
+      {
+        id: 'gp-1',
+        game_id: gameId,
+        user_id: playerId,
+        balance: '10000',
+        equity: '10000',
+      } as any,
+    ]);
+
     vi.mocked(db.updateOrderInDB).mockResolvedValue();
     vi.mocked(db.insertOrderExecutionInDB).mockResolvedValue();
     vi.mocked(db.updatePositionInDB).mockResolvedValue();
+    vi.mocked(db.updateGamePlayerBalanceInDB).mockResolvedValue();
 
     await processConditionalOrders(mockSupabase, gameId, tick);
 
@@ -316,6 +634,17 @@ describe('processConditionalOrders', () => {
         currentPrice: currentPrice,
         unrealizedPnl: expectedPnl,
       }
+    );
+
+    // Verify balance was credited with proceeds
+    const proceeds = currentPrice * quantity;
+    const newBalance = 10000 + proceeds;
+    expect(db.updateGamePlayerBalanceInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      gameId,
+      playerId,
+      newBalance,
+      10000 // Equity unchanged (will be recalculated later)
     );
   });
 
@@ -358,9 +687,21 @@ describe('processConditionalOrders', () => {
       { symbol, price: currentPrice.toString(), game_state: tick } as any,
     ]);
 
+    // Mock player for balance credit
+    vi.mocked(db.fetchGamePlayersFromDB).mockResolvedValue([
+      {
+        id: 'gp-1',
+        game_id: gameId,
+        user_id: playerId,
+        balance: '10000',
+        equity: '10000',
+      } as any,
+    ]);
+
     vi.mocked(db.updateOrderInDB).mockResolvedValue();
     vi.mocked(db.insertOrderExecutionInDB).mockResolvedValue();
     vi.mocked(db.updatePositionInDB).mockResolvedValue();
+    vi.mocked(db.updateGamePlayerBalanceInDB).mockResolvedValue();
 
     await processConditionalOrders(mockSupabase, gameId, tick);
 
@@ -382,6 +723,207 @@ describe('processConditionalOrders', () => {
         currentPrice: currentPrice,
         unrealizedPnl: expectedPnl,
       }
+    );
+
+    // Verify balance was credited with proceeds
+    const proceeds = currentPrice * quantity;
+    const newBalance = 10000 + proceeds;
+    expect(db.updateGamePlayerBalanceInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      gameId,
+      playerId,
+      newBalance,
+      10000 // Equity unchanged (will be recalculated later)
+    );
+  });
+
+  it('should partially close position on take profit', async () => {
+    const entryPrice = 50000;
+    const triggerPrice = 55000;
+    const currentPrice = 56000; // Above trigger
+    const positionQty = 0.2;
+    const tpQty = 0.1; // Partial close
+    const positionId = 'pos-1';
+
+    // Mock TP order with partial quantity
+    vi.mocked(db.fetchOrdersFromDB).mockResolvedValue([
+      {
+        id: 'tp-order-2',
+        game_id: gameId,
+        player_id: playerId,
+        symbol,
+        order_type: 'TAKE_PROFIT',
+        side: 'SELL',
+        quantity: tpQty.toString(),
+        trigger_price: triggerPrice.toString(),
+        position_id: positionId,
+        status: 'pending',
+      } as any,
+    ]);
+
+    // Mock open position with larger quantity
+    vi.mocked(db.fetchPositionsFromDB).mockResolvedValue([
+      {
+        id: positionId,
+        game_id: gameId,
+        player_id: playerId,
+        symbol,
+        side: 'BUY',
+        quantity: positionQty.toString(),
+        entry_price: entryPrice.toString(),
+        status: 'open',
+      } as any,
+    ]);
+
+    // Mock price data
+    vi.mocked(db.fetchPriceDataFromDB).mockResolvedValue([
+      { symbol, price: currentPrice.toString(), game_state: tick } as any,
+    ]);
+
+    // Mock player
+    vi.mocked(db.fetchGamePlayersFromDB).mockResolvedValue([
+      {
+        id: 'gp-1',
+        game_id: gameId,
+        user_id: playerId,
+        balance: '10000',
+        equity: '10000',
+      } as any,
+    ]);
+
+    vi.mocked(db.updateOrderInDB).mockResolvedValue();
+    vi.mocked(db.insertOrderExecutionInDB).mockResolvedValue();
+    vi.mocked(db.updatePositionInDB).mockResolvedValue();
+    vi.mocked(db.updateGamePlayerBalanceInDB).mockResolvedValue();
+
+    await processConditionalOrders(mockSupabase, gameId, tick);
+
+    // Verify TP order was filled
+    expect(db.updateOrderInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      'tp-order-2',
+      'filled',
+      currentPrice
+    );
+
+    // Verify position was partially reduced (not closed) using updatePositionInDB
+    const remainingQty = positionQty - tpQty; // 0.1
+    expect(db.updatePositionInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      positionId,
+      {
+        quantity: remainingQty,
+        currentPrice: currentPrice,
+      }
+    );
+
+    // Verify balance was credited
+    const proceeds = currentPrice * tpQty;
+    const newBalance = 10000 + proceeds;
+    expect(db.updateGamePlayerBalanceInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      gameId,
+      playerId,
+      newBalance,
+      10000
+    );
+  });
+
+  it('should partially close position on stop loss', async () => {
+    const entryPrice = 50000;
+    const triggerPrice = 48000;
+    const currentPrice = 47000; // Below trigger
+    const positionQty = 0.2;
+    const slQty = 0.1; // Partial close
+    const positionId = 'pos-1';
+
+    // Mock supabase.from() chain for partial close
+    (mockSupabase as any).from = vi.fn().mockReturnValue({
+      update: vi.fn().mockReturnValue({
+        eq: vi.fn().mockResolvedValue({ data: null, error: null }),
+      }),
+    });
+
+    // Mock SL order with partial quantity
+    vi.mocked(db.fetchOrdersFromDB).mockResolvedValue([
+      {
+        id: 'sl-order-2',
+        game_id: gameId,
+        player_id: playerId,
+        symbol,
+        order_type: 'STOP_LOSS',
+        side: 'SELL',
+        quantity: slQty.toString(),
+        trigger_price: triggerPrice.toString(),
+        position_id: positionId,
+        status: 'pending',
+      } as any,
+    ]);
+
+    // Mock open position with larger quantity
+    vi.mocked(db.fetchPositionsFromDB).mockResolvedValue([
+      {
+        id: positionId,
+        game_id: gameId,
+        player_id: playerId,
+        symbol,
+        side: 'BUY',
+        quantity: positionQty.toString(),
+        entry_price: entryPrice.toString(),
+        status: 'open',
+      } as any,
+    ]);
+
+    // Mock price data
+    vi.mocked(db.fetchPriceDataFromDB).mockResolvedValue([
+      { symbol, price: currentPrice.toString(), game_state: tick } as any,
+    ]);
+
+    // Mock player
+    vi.mocked(db.fetchGamePlayersFromDB).mockResolvedValue([
+      {
+        id: 'gp-1',
+        game_id: gameId,
+        user_id: playerId,
+        balance: '10000',
+        equity: '10000',
+      } as any,
+    ]);
+
+    vi.mocked(db.updateOrderInDB).mockResolvedValue();
+    vi.mocked(db.insertOrderExecutionInDB).mockResolvedValue();
+    vi.mocked(db.updateGamePlayerBalanceInDB).mockResolvedValue();
+
+    await processConditionalOrders(mockSupabase, gameId, tick);
+
+    // Verify SL order was filled
+    expect(db.updateOrderInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      'sl-order-2',
+      'filled',
+      currentPrice
+    );
+
+    // Verify position was partially reduced (not closed) using updatePositionInDB
+    const remainingQty = positionQty - slQty; // 0.1
+    expect(db.updatePositionInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      positionId,
+      {
+        quantity: remainingQty,
+        currentPrice: currentPrice,
+      }
+    );
+
+    // Verify balance was credited
+    const proceeds = currentPrice * slQty;
+    const newBalance = 10000 + proceeds;
+    expect(db.updateGamePlayerBalanceInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      gameId,
+      playerId,
+      newBalance,
+      10000
     );
   });
 

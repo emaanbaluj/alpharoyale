@@ -668,6 +668,14 @@ export async function runScenario(scenarioName: string): Promise<boolean> {
         return await scenario_extendedTrading();
       case "gameExpiration":
         return await scenario_gameExpiration();
+      case "positionMerging":
+        return await scenario_positionMerging();
+      case "insufficientBalance":
+        return await scenario_insufficientBalance();
+      case "partialSell":
+        return await scenario_partialSell();
+      case "partialTakeProfit":
+        return await scenario_partialTakeProfit();
       default:
         console.error(`Unknown scenario: ${scenarioName}`);
         return false;
@@ -1337,6 +1345,10 @@ Available scenarios:
   equityHistory            Test equity history tracking
   extended                 Extended trading scenario with multiple trades across multiple ticks
   gameExpiration           Test game expiration timeout functionality
+  positionMerging          Test position merging when buying into existing position
+  insufficientBalance      Test balance rejection when funds are insufficient
+  partialSell              Test partial position close on sell
+  partialTakeProfit        Test partial position close on take profit
 
 Examples:
   npx tsx src/test-setup.ts setup
@@ -1468,6 +1480,410 @@ async function scenario_gameExpiration(): Promise<boolean> {
     return true;
   } catch (error) {
     console.error("❌ Game expiration scenario failed:", error);
+    return false;
+  }
+}
+
+/**
+ * Scenario 9: Position merging
+ * Tests that buying into an existing position merges positions with weighted average entry price
+ */
+async function scenario_positionMerging(): Promise<boolean> {
+  const supabase = getSupabase();
+  const playerId = TEST_USERS[0].id;
+  const symbol = "BTC";
+  const initialBalance = 20000.0;
+
+  try {
+    console.log("📋 Setting up position merging scenario...");
+    
+    const game = await db.insertGameInDB(supabase, playerId, null, initialBalance, 60);
+    await db.updateGameStatusInDB(supabase, game.id, "active");
+    await db.insertGamePlayerInDB(supabase, game.id, playerId, initialBalance);
+
+    // First buy: 0.1 BTC @ $50,000 (cost $5,000)
+    const firstQty = 0.1;
+    const firstPrice = 50000;
+    const firstOrder = await db.insertOrderInDB(
+      supabase,
+      game.id,
+      playerId,
+      symbol,
+      "MARKET",
+      "BUY",
+      firstQty
+    );
+
+    const gameState = await db.fetchGameStateFromDB(supabase);
+    const tick1 = (gameState?.current_tick || 0) + 1;
+    await db.insertPrice(supabase, symbol, firstPrice, tick1);
+    await db.updateGameStateInDB(supabase, tick1);
+    await processGameTick(game.id, tick1, supabase);
+
+    console.log(`✅ First buy: ${firstQty} BTC @ $${firstPrice}`);
+
+    // Second buy: 0.1 BTC @ $60,000 (cost $6,000)
+    const secondQty = 0.1;
+    const secondPrice = 60000;
+    const secondOrder = await db.insertOrderInDB(
+      supabase,
+      game.id,
+      playerId,
+      symbol,
+      "MARKET",
+      "BUY",
+      secondQty
+    );
+
+    const tick2 = tick1 + 1;
+    await db.insertPrice(supabase, symbol, secondPrice, tick2);
+    await db.updateGameStateInDB(supabase, tick2);
+    await processGameTick(game.id, tick2, supabase);
+
+    console.log(`✅ Second buy: ${secondQty} BTC @ $${secondPrice}`);
+
+    // Validate
+    const positions = await db.fetchPositionsFromDB(supabase, game.id, "open");
+    const players = await db.fetchGamePlayersFromDB(supabase, game.id);
+
+    if (positions.length !== 1) {
+      console.error(`❌ Expected 1 position, got ${positions.length}`);
+      return false;
+    }
+
+    const pos = positions[0];
+    const expectedQty = firstQty + secondQty; // 0.2
+    const expectedEntry = (firstQty * firstPrice + secondQty * secondPrice) / expectedQty; // $55,000
+
+    console.log(`📊 Position: ${Number(pos.quantity)} BTC @ $${Number(pos.entry_price).toFixed(2)}`);
+    console.log(`   Expected: ${expectedQty} BTC @ $${expectedEntry.toFixed(2)}`);
+
+    if (Math.abs(Number(pos.quantity) - expectedQty) > 0.001 ||
+        Math.abs(Number(pos.entry_price) - expectedEntry) > 0.01) {
+      console.error("❌ Position merging failed");
+      return false;
+    }
+
+    // Verify balance: $20,000 - $5,000 - $6,000 = $9,000
+    const expectedBalance = initialBalance - (firstQty * firstPrice) - (secondQty * secondPrice);
+    const actualBalance = Number(players[0].balance);
+    console.log(`💰 Balance: $${actualBalance.toFixed(2)} (expected: $${expectedBalance.toFixed(2)})`);
+
+    if (Math.abs(actualBalance - expectedBalance) > 0.01) {
+      console.error("❌ Balance incorrect after position merging");
+      return false;
+    }
+
+    // Cleanup
+    await supabase.from("games").delete().eq("id", game.id);
+
+    console.log("\n✅ Position merging scenario passed!");
+    return true;
+  } catch (error) {
+    console.error("❌ Position merging scenario failed:", error);
+    return false;
+  }
+}
+
+/**
+ * Scenario 10: Insufficient balance rejection
+ * Tests that buy orders are rejected when player has insufficient funds
+ */
+async function scenario_insufficientBalance(): Promise<boolean> {
+  const supabase = getSupabase();
+  const playerId = TEST_USERS[0].id;
+  const symbol = "BTC";
+  const balance = 4000.0; // Less than order cost
+
+  try {
+    console.log("📋 Setting up insufficient balance scenario...");
+    
+    const game = await db.insertGameInDB(supabase, playerId, null, balance, 60);
+    await db.updateGameStatusInDB(supabase, game.id, "active");
+    await db.insertGamePlayerInDB(supabase, game.id, playerId, balance);
+
+    // Try to buy 0.1 BTC @ $50,000 (cost $5,000, but only have $4,000)
+    const order = await db.insertOrderInDB(
+      supabase,
+      game.id,
+      playerId,
+      symbol,
+      "MARKET",
+      "BUY",
+      0.1
+    );
+
+    const gameState = await db.fetchGameStateFromDB(supabase);
+    const tick = (gameState?.current_tick || 0) + 1;
+    await db.insertPrice(supabase, symbol, 50000, tick);
+    await db.updateGameStateInDB(supabase, tick);
+    await processGameTick(game.id, tick, supabase);
+
+    // Validate order was rejected
+    const orders = await db.fetchOrdersFromDB(supabase, game.id);
+    const orderResult = orders.find(o => o.id === order.id);
+
+    if (!orderResult) {
+      console.error("❌ Order not found");
+      return false;
+    }
+
+    if (orderResult.status !== "rejected") {
+      console.error(`❌ Order should be rejected, but status is: ${orderResult.status}`);
+      return false;
+    }
+
+    // Verify no position was created
+    const positions = await db.fetchPositionsFromDB(supabase, game.id, "open");
+    if (positions.length > 0) {
+      console.error(`❌ No position should be created, but found ${positions.length}`);
+      return false;
+    }
+
+    // Verify balance unchanged
+    const players = await db.fetchGamePlayersFromDB(supabase, game.id);
+    if (Math.abs(Number(players[0].balance) - balance) > 0.01) {
+      console.error(`❌ Balance should be unchanged at $${balance}, but is $${Number(players[0].balance)}`);
+      return false;
+    }
+
+    console.log("✅ Order correctly rejected due to insufficient balance");
+    console.log("✅ No position created");
+    console.log("✅ Balance unchanged");
+
+    // Cleanup
+    await supabase.from("games").delete().eq("id", game.id);
+
+    console.log("\n✅ Insufficient balance scenario passed!");
+    return true;
+  } catch (error) {
+    console.error("❌ Insufficient balance scenario failed:", error);
+    return false;
+  }
+}
+
+/**
+ * Scenario 11: Partial sell
+ * Tests that selling part of a position reduces the position size instead of closing it
+ */
+async function scenario_partialSell(): Promise<boolean> {
+  const supabase = getSupabase();
+  const playerId = TEST_USERS[0].id;
+  const symbol = "BTC";
+  const initialBalance = 10000.0;
+
+  try {
+    console.log("📋 Setting up partial sell scenario...");
+    
+    const game = await db.insertGameInDB(supabase, playerId, null, initialBalance, 60);
+    await db.updateGameStatusInDB(supabase, game.id, "active");
+    await db.insertGamePlayerInDB(supabase, game.id, playerId, initialBalance);
+
+    // Buy 0.2 BTC @ $50,000 (cost $10,000)
+    const buyQty = 0.2;
+    const buyPrice = 50000;
+    const buyOrder = await db.insertOrderInDB(
+      supabase,
+      game.id,
+      playerId,
+      symbol,
+      "MARKET",
+      "BUY",
+      buyQty
+    );
+
+    const gameState = await db.fetchGameStateFromDB(supabase);
+    const tick1 = (gameState?.current_tick || 0) + 1;
+    await db.insertPrice(supabase, symbol, buyPrice, tick1);
+    await db.updateGameStateInDB(supabase, tick1);
+    await processGameTick(game.id, tick1, supabase);
+
+    console.log(`✅ Bought ${buyQty} BTC @ $${buyPrice}`);
+
+    // Sell 0.1 BTC @ $55,000 (partial close)
+    const sellQty = 0.1;
+    const sellPrice = 55000;
+    const sellOrder = await db.insertOrderInDB(
+      supabase,
+      game.id,
+      playerId,
+      symbol,
+      "MARKET",
+      "SELL",
+      sellQty
+    );
+
+    const tick2 = tick1 + 1;
+    await db.insertPrice(supabase, symbol, sellPrice, tick2);
+    await db.updateGameStateInDB(supabase, tick2);
+    await processGameTick(game.id, tick2, supabase);
+
+    console.log(`✅ Sold ${sellQty} BTC @ $${sellPrice}`);
+
+    // Validate
+    const positions = await db.fetchPositionsFromDB(supabase, game.id, "open");
+    const players = await db.fetchGamePlayersFromDB(supabase, game.id);
+
+    // Should have 1 open position with 0.1 BTC remaining
+    if (positions.length !== 1) {
+      console.error(`❌ Expected 1 open position, got ${positions.length}`);
+      return false;
+    }
+
+    const pos = positions[0];
+    const expectedQty = buyQty - sellQty; // 0.1
+    if (Math.abs(Number(pos.quantity) - expectedQty) > 0.001) {
+      console.error(`❌ Position quantity should be ${expectedQty}, got ${Number(pos.quantity)}`);
+      return false;
+    }
+
+    if (pos.status !== "open") {
+      console.error(`❌ Position should be open, but status is: ${pos.status}`);
+      return false;
+    }
+
+    // Verify balance: $0 (all used) + $5,500 (proceeds) = $5,500
+    const proceeds = sellPrice * sellQty; // $5,500
+    const expectedBalance = initialBalance - (buyQty * buyPrice) + proceeds; // $5,500
+    const actualBalance = Number(players[0].balance);
+
+    console.log(`💰 Balance: $${actualBalance.toFixed(2)} (expected: $${expectedBalance.toFixed(2)})`);
+    console.log(`📊 Position: ${Number(pos.quantity)} BTC (should be ${expectedQty})`);
+
+    if (Math.abs(actualBalance - expectedBalance) > 0.01) {
+      console.error("❌ Balance incorrect after partial sell");
+      return false;
+    }
+
+    // Cleanup
+    await supabase.from("games").delete().eq("id", game.id);
+
+    console.log("\n✅ Partial sell scenario passed!");
+    return true;
+  } catch (error) {
+    console.error("❌ Partial sell scenario failed:", error);
+    return false;
+  }
+}
+
+/**
+ * Scenario 12: Partial take profit
+ * Tests that a TP order can partially close a position
+ */
+async function scenario_partialTakeProfit(): Promise<boolean> {
+  const supabase = getSupabase();
+  const playerId = TEST_USERS[0].id;
+  const symbol = "BTC";
+  const initialBalance = 10000.0;
+
+  try {
+    console.log("📋 Setting up partial take profit scenario...");
+    
+    const game = await db.insertGameInDB(supabase, playerId, null, initialBalance, 60);
+    await db.updateGameStatusInDB(supabase, game.id, "active");
+    await db.insertGamePlayerInDB(supabase, game.id, playerId, initialBalance);
+
+    // Buy 0.2 BTC @ $50,000
+    const buyQty = 0.2;
+    const buyPrice = 50000;
+    const buyOrder = await db.insertOrderInDB(
+      supabase,
+      game.id,
+      playerId,
+      symbol,
+      "MARKET",
+      "BUY",
+      buyQty
+    );
+
+    const gameState = await db.fetchGameStateFromDB(supabase);
+    const tick1 = (gameState?.current_tick || 0) + 1;
+    await db.insertPrice(supabase, symbol, buyPrice, tick1);
+    await db.updateGameStateInDB(supabase, tick1);
+    await processGameTick(game.id, tick1, supabase);
+
+    // Get position ID
+    const positionsAfterBuy = await db.fetchPositionsFromDB(supabase, game.id, "open");
+    const positionId = positionsAfterBuy[0].id;
+
+    console.log(`✅ Bought ${buyQty} BTC @ $${buyPrice}`);
+
+    // Create TP order: 0.1 BTC @ $55,000
+    const tpQty = 0.1;
+    const triggerPrice = 55000;
+    const tpOrder = await db.insertOrderInDB(
+      supabase,
+      game.id,
+      playerId,
+      symbol,
+      "TAKE_PROFIT",
+      "SELL",
+      tpQty,
+      null,
+      triggerPrice,
+      positionId
+    );
+
+    // Price reaches $56,000 (above trigger)
+    const currentPrice = 56000;
+    const tick2 = tick1 + 1;
+    await db.insertPrice(supabase, symbol, currentPrice, tick2);
+    await db.updateGameStateInDB(supabase, tick2);
+    await processGameTick(game.id, tick2, supabase);
+
+    console.log(`✅ Price reached $${currentPrice}, TP should trigger`);
+
+    // Validate
+    const positions = await db.fetchPositionsFromDB(supabase, game.id, "open");
+    const orders = await db.fetchOrdersFromDB(supabase, game.id);
+    const players = await db.fetchGamePlayersFromDB(supabase, game.id);
+
+    // TP order should be filled
+    const tpOrderResult = orders.find(o => o.id === tpOrder.id);
+    if (!tpOrderResult || tpOrderResult.status !== "filled") {
+      console.error(`❌ TP order should be filled, but status is: ${tpOrderResult?.status}`);
+      return false;
+    }
+
+    // Position should still be open with 0.1 BTC remaining
+    if (positions.length !== 1) {
+      console.error(`❌ Expected 1 open position, got ${positions.length}`);
+      return false;
+    }
+
+    const pos = positions[0];
+    const expectedQty = buyQty - tpQty; // 0.1
+    if (Math.abs(Number(pos.quantity) - expectedQty) > 0.001) {
+      console.error(`❌ Position quantity should be ${expectedQty}, got ${Number(pos.quantity)}`);
+      return false;
+    }
+
+    if (pos.status !== "open") {
+      console.error(`❌ Position should be open, but status is: ${pos.status}`);
+      return false;
+    }
+
+    // Verify balance credited with proceeds
+    const proceeds = currentPrice * tpQty; // $5,600
+    const cost = buyQty * buyPrice; // $10,000
+    const expectedBalance = initialBalance - cost + proceeds; // $5,600
+    const actualBalance = Number(players[0].balance);
+
+    console.log(`💰 Balance: $${actualBalance.toFixed(2)} (expected: $${expectedBalance.toFixed(2)})`);
+    console.log(`📊 Position: ${Number(pos.quantity)} BTC (should be ${expectedQty})`);
+
+    if (Math.abs(actualBalance - expectedBalance) > 0.01) {
+      console.error("❌ Balance incorrect after partial TP");
+      return false;
+    }
+
+    // Cleanup
+    await supabase.from("games").delete().eq("id", game.id);
+
+    console.log("\n✅ Partial take profit scenario passed!");
+    return true;
+  } catch (error) {
+    console.error("❌ Partial take profit scenario failed:", error);
     return false;
   }
 }
