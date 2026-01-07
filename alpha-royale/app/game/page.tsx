@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import toast from 'react-hot-toast';
 import { supabase } from '../auth/supabaseClient/supabaseClient';
@@ -48,6 +48,7 @@ const COMPATIBLETICKERS = ["ETH", "BTC", "AAPL"] as const;
 type CompatibleTickers = (typeof COMPATIBLETICKERS)[number];
 
 function GamePageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const gameId = searchParams.get('id');
 
@@ -308,7 +309,7 @@ function GamePageContent() {
     if (pos) {
       // Track PnL changes for animation
       const newPnlMap: Record<string, number> = {};
-      pos.forEach(p => {
+      pos.forEach((p: { id: string | number; unrealized_pnl: number; }) => {
         newPnlMap[p.id] = p.unrealized_pnl;
       });
       setPreviousPnl(newPnlMap);
@@ -630,7 +631,9 @@ function GamePageContent() {
       {/* Top Navigation Bar */}
       <div className="bg-[#13141a] border-b border-[#1e1f25] px-6 py-3 flex justify-between items-center shrink-0">
         <div className="flex items-center gap-6">
-          <Image src="/alpha_royal_logo.png" alt="Alpha Royale" width={60} height={60} className="rounded" />
+          <button onClick={() => router.push('/home')} className="hover:opacity-80 transition-opacity">
+            <Image src="/alpha_royal_logo.png" alt="Alpha Royale" width={60} height={60} className="rounded" />
+          </button>
           <div className="h-6 w-px bg-[#1e1f25]"></div>
           <div className="flex items-center gap-4 text-sm">
             <div className="flex items-center gap-2">
