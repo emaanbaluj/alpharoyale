@@ -443,6 +443,7 @@ export async function updatePositionInDB(
     entryPrice?: number;
   }
 ): Promise<void> {
+  
   const payload: any = {
     updated_at: new Date().toISOString(),
   };
