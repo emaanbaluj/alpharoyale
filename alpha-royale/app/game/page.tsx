@@ -662,9 +662,6 @@ function GamePageContent() {
               <span className="text-sm font-mono font-semibold text-gray-500">--:--</span>
             )}
           </div>
-          <button className="px-3 py-1.5 bg-[#1e1f25] hover:bg-[#25262d] text-gray-300 text-sm rounded transition-colors">
-            Settings
-          </button>
         </div>
       </div>
 
