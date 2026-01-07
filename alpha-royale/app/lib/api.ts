@@ -41,6 +41,34 @@ export const orderAPI = {
       body: JSON.stringify(orderData)
     });
     return res.json();
+  },
+
+  async getOrders(gameId: string, playerId: string, status: string = 'pending') {
+    const res = await fetch(`/api/orders/get?gameId=${gameId}&playerId=${playerId}&status=${status}`);
+    return res.json();
+  },
+
+  async cancelOrder(orderId: string, playerId: string) {
+    const res = await fetch('/api/orders/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId, playerId })
+    });
+    return res.json();
+  },
+
+  async getOrdersByPosition(positionId: string, playerId: string) {
+    const res = await fetch(`/api/orders/by-position?positionId=${positionId}&playerId=${playerId}`);
+    return res.json();
+  },
+
+  async updateOrder(orderId: string, playerId: string, updates: { triggerPrice?: number; quantity?: number }) {
+    const res = await fetch('/api/orders/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId, playerId, ...updates })
+    });
+    return res.json();
   }
 };
 
