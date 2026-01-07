@@ -978,6 +978,85 @@ export async function updateEquityHistory(
   }
 }
 
+/**
+ * Close all OPEN positions for a game at the end of the trading day (end of game).
+ * At the end of the day close all the positions such that at the end there is no exposure, and realised equity is calculated
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID to close positions for
+ * @param tick - Current tick number when the game ends
+ */
+
+export async function closeAllOpenPositions(
+  supabase: SupabaseClient,
+  gameId: string,
+  tick: number
+): Promise<void> {
+  // Fetch all open positions
+  const openPositions = await db.fetchPositionsFromDB(supabase, gameId, "open");
+  if (openPositions.length === 0) return;
+
+  // Reject any remaining pending orders (recommended at game end)
+  const pendingOrders = await db.fetchOrdersFromDB(supabase, gameId, "pending");
+  await Promise.all(pendingOrders.map((o) => db.updateOrderInDB(supabase, o.id, "rejected")));
+
+  // 3) Latest prices for all symbols 
+  const symbols = Array.from(new Set(openPositions.map((p: any) => p.symbol)));
+  const priceBySymbol = await getLatestPricesBySymbol(supabase, symbols);
+
+  // Load players' current balances (cash)
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
+  const newBalanceByPlayer = new Map<string, number>(
+    players.map((p: any) => [p.user_id, Number(p.balance ?? 0)])
+  );
+
+  // Close each position and credit proceeds
+  for (const pos of openPositions as any[]) {
+    const playerId = pos.player_id;
+    const qty = Number(pos.quantity);
+    const entry = Number(pos.entry_price);
+
+    const closePxRaw = priceBySymbol.get(pos.symbol) 
+    const closePx = Number(closePxRaw);
+
+
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    if (!Number.isFinite(entry) || entry <= 0) continue;
+    if (!Number.isFinite(closePx) || closePx <= 0) continue;
+
+    // Realized P&L (no leverage)
+    const pnl =
+      pos.side === "BUY"
+        ? (closePx - entry) * qty
+        : pos.side === "SELL"
+        ? (entry - closePx) * qty
+        : 0;
+
+    // Mark position closed
+    await db.updatePositionInDB(supabase, pos.id, {
+      status: "closed",
+      currentPrice: closePx,
+      unrealizedPnl: pnl, 
+    });
+
+    // Update player's CASH balance 
+    const prevBal = newBalanceByPlayer.get(playerId) ?? 0;
+
+    if (pos.side === "BUY") {
+      newBalanceByPlayer.set(playerId, prevBal + closePx * qty);
+    } else {
+      
+      newBalanceByPlayer.set(playerId, prevBal);
+    }
+  }
+
+  // After closing all positions, equity == balance (no open positions left)
+  await Promise.all(
+    Array.from(newBalanceByPlayer.entries()).map(([playerId, bal]) =>
+      db.updateGamePlayerBalanceInDB(supabase, gameId, playerId, bal, bal)
+    )
+  );
+}
+
 // --------------------
 // Orchestrator
 // --------------------
