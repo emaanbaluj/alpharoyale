@@ -1,9 +1,18 @@
 export const gameAPI = {
-  async createGame(userId: string) {
+  async createGame(userId: string, durationMinutes: number = 60) {
     const res = await fetch('/api/games/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId })
+      body: JSON.stringify({ userId, durationMinutes })
+    });
+    return res.json();
+  },
+
+  async startGame(gameId: string, userId: string) {
+    const res = await fetch('/api/games/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gameId, userId })
     });
     return res.json();
   },

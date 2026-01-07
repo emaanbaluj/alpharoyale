@@ -225,7 +225,18 @@ function GamePageContent() {
           setTimeout(() => {
             loadGameData(gameId, userId);
           }, 500);
+        } else if (payload.new.status === 'waiting' && userId) {
+          // Reload game data when game updates
+          loadGameData(gameId, userId);
         }
+      }
+    });
+
+    // Subscribe to game players changes while waiting
+    const unsubPlayers = subscribeToGamePlayers(gameId, (payload) => {
+      console.log('Game players updated in waiting room:', payload);
+      if (userId) {
+        loadGameData(gameId, userId);
       }
     });
 
@@ -238,6 +249,7 @@ function GamePageContent() {
 
     return () => {
       unsubGame();
+      unsubPlayers();
       clearInterval(pollInterval);
     };
   }, [gameId, userId, gameStatus]);
@@ -688,7 +700,15 @@ function GamePageContent() {
             </div>
             <h2 className="text-2xl font-bold text-white mb-2">Waiting Room</h2>
             <p className="text-gray-400">
-              {gameStatus === null ? 'Loading game...' : 'Waiting for opponent to join...'}
+              {gameStatus === null 
+                ? 'Loading game...' 
+                : gamePlayers.length === 2 
+                  ? isPlayer1
+                    ? 'Both players ready! Click "Start Game" to begin.'
+                    : 'Both players ready! Waiting for game creator to start...'
+                  : isPlayer1
+                    ? 'Waiting for opponent to join...'
+                    : 'Waiting for opponent to join...'}
             </p>
           </div>
 
@@ -710,10 +730,18 @@ function GamePageContent() {
                   </button>
                 </div>
               </div>
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between mb-3">
                 <span className="text-sm font-medium text-gray-400">Status</span>
                 <span className="text-sm font-medium text-yellow-400 bg-yellow-900/20 px-3 py-1 rounded">Waiting</span>
               </div>
+              {currentGame && currentGame.duration_minutes && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-400">Duration</span>
+                  <span className="text-sm font-medium text-white bg-[#1e1f25] px-3 py-1 rounded">
+                    {currentGame.duration_minutes} {currentGame.duration_minutes === 1 ? 'minute' : 'minutes'}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="bg-[#0a0b0d] border border-[#1e1f25] rounded-lg p-4">
@@ -744,9 +772,14 @@ function GamePageContent() {
                           </div>
                         </div>
                       </div>
-                      {isCurrentUser && (
-                        <span className="text-xs px-2 py-1 bg-blue-600/20 text-blue-400 rounded">You</span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {isP1 && (
+                          <span className="text-xs px-2 py-1 bg-purple-600/20 text-purple-400 rounded" title="Game Creator">Creator</span>
+                        )}
+                        {isCurrentUser && (
+                          <span className="text-xs px-2 py-1 bg-blue-600/20 text-blue-400 rounded">You</span>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -774,16 +807,45 @@ function GamePageContent() {
             >
               Back to Home
             </button>
-            <button
-              onClick={() => {
-                if (gameId && userId) {
-                  loadGameData(gameId, userId);
-                }
-              }}
-              className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition-colors"
-            >
-              Refresh
-            </button>
+            {gamePlayers.length === 2 && currentGame && isPlayer1 ? (
+              <button
+                onClick={async () => {
+                  if (!gameId || !userId) return;
+                  setLoading(true);
+                  try {
+                    const result = await gameAPI.startGame(gameId, userId);
+                    if (result.game) {
+                      toast.success('Game starting!');
+                      // Reload game data to transition to active game
+                      setTimeout(() => {
+                        loadGameData(gameId, userId);
+                      }, 500);
+                    } else {
+                      toast.error('Failed to start game: ' + result.error);
+                      setLoading(false);
+                    }
+                  } catch (error: any) {
+                    toast.error('Error starting game: ' + error.message);
+                    setLoading(false);
+                  }
+                }}
+                disabled={loading}
+                className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? 'Starting...' : 'Start Game'}
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  if (gameId && userId) {
+                    loadGameData(gameId, userId);
+                  }
+                }}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition-colors"
+              >
+                Refresh
+              </button>
+            )}
           </div>
         </div>
       </div>

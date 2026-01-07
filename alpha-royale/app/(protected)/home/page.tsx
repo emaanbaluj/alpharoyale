@@ -28,6 +28,8 @@ export default function HomeScreen() {
     const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>([]);
     const [joinGameId, setJoinGameId] = useState<string>("");
     const [loading, setLoading] = useState(false);
+    const [gameDuration, setGameDuration] = useState<string>("60");
+    const [showDurationInput, setShowDurationInput] = useState<boolean>(false);
 
     async function handleLogout() { 
         await supabase.auth.signOut(); 
@@ -61,8 +63,13 @@ export default function HomeScreen() {
 
     async function handleCreateGame() {
         if (!userId) return;
+        const duration = parseInt(gameDuration) || 60;
+        if (duration < 1 || duration > 1440) {
+            toast.error('Game duration must be between 1 and 1440 minutes (24 hours)');
+            return;
+        }
         setLoading(true);
-        const result = await gameAPI.createGame(userId);
+        const result = await gameAPI.createGame(userId, duration);
         setLoading(false);
         if (result.game) {
             router.push(`/game?id=${result.game.id}`);
@@ -90,13 +97,59 @@ export default function HomeScreen() {
                 <p className="mb-4 text-gray-300 text-sm truncate">{email}</p>
                 
                 <div className="space-y-3">
-                    <button 
-                        className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 rounded font-medium disabled:opacity-50 transition-colors"
-                        onClick={handleCreateGame}
-                        disabled={loading}
-                    >
-                        {loading ? 'Creating...' : 'Start Game'}
-                    </button>
+                    {!showDurationInput ? (
+                        <button 
+                            className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 rounded font-medium disabled:opacity-50 transition-colors"
+                            onClick={() => setShowDurationInput(true)}
+                            disabled={loading}
+                        >
+                            Create Game
+                        </button>
+                    ) : (
+                        <div className="space-y-2">
+                            <div>
+                                <label className="block text-xs text-gray-500 mb-1.5">Game Duration (minutes)</label>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max="1440"
+                                    value={gameDuration}
+                                    onChange={(e) => {
+                                        const value = e.target.value;
+                                        // Allow empty string or valid numbers
+                                        if (value === '' || (!isNaN(Number(value)) && Number(value) >= 0)) {
+                                            setGameDuration(value);
+                                        }
+                                    }}
+                                    onBlur={(e) => {
+                                        // Set to default if empty on blur
+                                        if (e.target.value === '' || parseInt(e.target.value) < 1) {
+                                            setGameDuration('60');
+                                        }
+                                    }}
+                                    className="w-full px-3 py-2 bg-[#0a0b0d] border border-[#1e1f25] text-white rounded text-sm focus:border-blue-500 focus:outline-none font-mono"
+                                    placeholder="60"
+                                />
+                                <p className="text-xs text-gray-500 mt-1">Default: 60 minutes (1 hour)</p>
+                            </div>
+                            <div className="flex gap-2">
+                                <button 
+                                    className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 rounded font-medium disabled:opacity-50 transition-colors"
+                                    onClick={handleCreateGame}
+                                    disabled={loading}
+                                >
+                                    {loading ? 'Creating...' : 'Create Game'}
+                                </button>
+                                <button 
+                                    className="px-4 py-2 bg-[#1e1f25] hover:bg-[#25262d] rounded font-medium transition-colors"
+                                    onClick={() => setShowDurationInput(false)}
+                                    disabled={loading}
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    )}
                     <div className="flex items-center gap-2">
                         <input
                             id="joinGameId" type="text" value={joinGameId} placeholder="Enter Game ID"
