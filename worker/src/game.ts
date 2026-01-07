@@ -444,6 +444,17 @@ async function handleBuyMarketOrder(
     return;
   }
 
+  // Deduct balance (cost of purchase)
+  const cost = qty * fillPrice;
+  const newBalance = balance - cost;
+  await db.updateGamePlayerBalanceInDB(
+    supabase,
+    gameId,
+    order.player_id,
+    newBalance,
+    Number(player.equity) // Equity unchanged (will be recalculated later)
+  );
+
   // Update the order in the database as filled
   await db.updateOrderInDB(supabase, order.id, "filled", fillPrice);
 

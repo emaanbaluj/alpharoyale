@@ -1564,12 +1564,15 @@ async function scenario_positionMerging(): Promise<boolean> {
       return false;
     }
 
-    // Note: Balance deduction was removed from handleBuyMarketOrder
-    // The balance check verifies position merging worked correctly
+    // Verify balance: $20,000 - $5,000 - $6,000 = $9,000
+    const expectedBalance = initialBalance - (firstQty * firstPrice) - (secondQty * secondPrice);
     const actualBalance = Number(players[0].balance);
-    console.log(`💰 Balance: $${actualBalance.toFixed(2)}`);
-    
-    // Position merging is what we're testing here, balance logic is tested elsewhere
+    console.log(`💰 Balance: $${actualBalance.toFixed(2)} (expected: $${expectedBalance.toFixed(2)})`);
+
+    if (Math.abs(actualBalance - expectedBalance) > 0.01) {
+      console.error("❌ Balance incorrect after position merging");
+      return false;
+    }
 
     // Cleanup
     await supabase.from("games").delete().eq("id", game.id);

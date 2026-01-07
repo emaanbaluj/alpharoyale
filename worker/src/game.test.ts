@@ -379,8 +379,16 @@ describe('processMarketOrders', () => {
       }
     );
 
-    // Note: Balance deduction was removed from handleBuyMarketOrder
-    // Balance updates happen elsewhere in the codebase
+    // Verify balance was deducted
+    const cost = secondQty * secondPrice; // $6,000
+    const newBalance = playerBalance - cost; // $14,000
+    expect(db.updateGamePlayerBalanceInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      gameId,
+      playerId,
+      newBalance,
+      playerBalance // Equity unchanged (will be recalculated later)
+    );
   });
 
   it('should partially close position on sell', async () => {
