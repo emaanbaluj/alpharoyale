@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { processGameTick } from "./game";
+import { processGameTick, closeAllOpenPositions, checkAndSetGameWinner } from "./game";
 import * as db from "./db";
 
 // Cloudflare Workers types
@@ -56,6 +56,12 @@ export default {
         // Check if game has expired before processing
         const wasExpired = await db.checkAndCompleteGameIfExpired(supabase, body.gameId);
         if (wasExpired) {
+          // Close all open positions at market prices and realize P&L
+          await closeAllOpenPositions(supabase, body.gameId, body.gameState);
+
+          // Determine and set the winner based on final equity
+          await checkAndSetGameWinner(supabase, body.gameId);
+
           console.log(`Game ${body.gameId} expired and marked as completed, skipping tick processing`);
           return new Response(
             JSON.stringify({ 

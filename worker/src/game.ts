@@ -979,8 +979,13 @@ export async function updateEquityHistory(
 }
 
 /**
- * Close all OPEN positions for a game at the end of the trading day (end of game).
- * At the end of the day close all the positions such that at the end there is no exposure, and realised equity is calculated
+ * Close all open positions for a game at the end of the trading day (end of game).
+ * - Rejects all pending orders
+ * - Fetches latest prices for all symbols
+ * - Closes each position at market price and realizes P&L
+ * - Credits proceeds back to player balances
+ * - Updates final equity (which equals balance after all positions closed)
+ *
  * @param supabase - Supabase client instance
  * @param gameId - Game ID to close positions for
  * @param tick - Current tick number when the game ends
@@ -1057,6 +1062,40 @@ export async function closeAllOpenPositions(
   );
 }
 
+/**
+ * Determine and set the winner of a completed game.
+ * - Fetches all players for the game
+ * - Finds the player with the highest equity
+ * - Updates the game status to "completed" with the winner_id
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID to determine winner for
+ */
+export async function checkAndSetGameWinner(supabase: SupabaseClient, gameId: string): Promise<void> {
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
+
+  if (players.length === 0) {
+    return;
+  }
+
+  // Find the player with the highest equity
+  let winner = players[0];
+  let maxEquity = Number(winner.equity ?? 0);
+
+  for (const player of players) {
+    const equity = Number(player.equity ?? 0);
+    if (equity > maxEquity) {
+      maxEquity = equity;
+      winner = player;
+    }
+  }
+
+  // Update the game with the winner
+  await db.updateGameStatusInDB(supabase, gameId, "completed", winner.user_id);
+}
+
+
+ 
 // --------------------
 // Orchestrator
 // --------------------
