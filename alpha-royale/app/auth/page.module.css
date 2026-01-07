@@ -1,20 +1,141 @@
+/* ===============================
+   Layout & background
+================================ */
+.authContainer {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: linear-gradient(135deg, #0a0b0d, #1a1b23);
+  overflow: hidden;
+}
 
-.authwrapper button[type="submit"]{
-    background-color: rgb(37, 99, 235);
-    border: 1px solid rgb(37, 99, 235);
-    border-radius: 5px;
-    padding: 8px 10px;
-}
-.authwrapper button[type="submit"]:hover {
-    background-color: rgb(29, 78, 216);
-    border: 1px solid rgb(29, 78, 216);
+.authContainer::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 20% 50%, rgba(59,130,246,.1), transparent 50%),
+    radial-gradient(circle at 80% 80%, rgba(139,92,246,.1), transparent 50%);
+  pointer-events: none;
 }
 
-.authwrapper input {
-    border: 1px solid rgb(56, 56, 56);
-    border-radius: 5px;
-    padding: 5px 10px;
+/* ===============================
+   Card
+================================ */
+.authCard {
+  width: 100%;
+  max-width: 480px;
+  max-height: calc(100vh - 48px);
+  padding: 32px;
+  background: rgba(15,16,20,.8);
+  backdrop-filter: blur(20px);
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.1);
+  box-shadow: 0 20px 30px rgba(0,0,0,.35);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  animation: fadeUp .4s ease;
 }
-.authwrapper input::placeholder {
-    opacity: 0.4;
+
+/* ===============================
+   Header / branding
+================================ */
+.backButton {
+  background: none;
+  border: none;
+  color: #60a5fa;
+  font-size: 14px;
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+
+.backButton:hover {
+  color: #93c5fd;
+}
+
+.logoContainer {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.logo {
+  filter: drop-shadow(0 4px 12px rgba(59,130,246,.3));
+}
+
+.headerText {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.title {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0 0 6px;
+  background: linear-gradient(#fff, #e5e7eb);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.subtitle {
+  font-size: 14px;
+  color: #9ca3af;
+}
+
+/* ===============================
+   Auth wrapper
+================================ */
+.authWrapper {
+  position: relative;
+  flex: 1;
+}
+
+/* ===============================
+   Loading overlay
+================================ */
+.loadingOverlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(15,16,20,.95);
+  backdrop-filter: blur(8px);
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+}
+
+.loadingSpinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgba(59,130,246,.2);
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+
+/* ===============================
+   Animations
+================================ */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ===============================
+   Responsive
+================================ */
+@media (max-width: 640px) {
+  .authCard { padding: 24px; }
+  .logo { width: 160px; height: 160px; }
+}
+
+@media (max-width: 480px) {
+  .authContainer { padding: 16px; }
 }
