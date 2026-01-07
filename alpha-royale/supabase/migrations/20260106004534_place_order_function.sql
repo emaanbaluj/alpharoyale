@@ -19,12 +19,13 @@ declare
     v_tick          integer;
     v_market_price  numeric;
     v_position_qty  numeric;
+    v_position_side text;
     v_order         orders;
 begin
     ------------------------------------------------------------------
     -- 0. Validate side & quantity
     ------------------------------------------------------------------
-    if p_side not in ('buy', 'sell') then
+    if p_side not in ('BUY', 'SELL') then
         raise exception 'Invalid order side: %', p_side;
     end if;
 
@@ -60,7 +61,7 @@ begin
     end if;
 
     ------------------------------------------------------------------
-    -- 3. Validate order type & semantics
+    -- 3. Order-type semantics
     ------------------------------------------------------------------
     if p_order_type = 'MARKET' then
         v_cost := p_quantity * v_market_price;
@@ -69,7 +70,6 @@ begin
         if p_price is null then
             raise exception 'Price is required for LIMIT orders';
         end if;
-
         v_cost := p_quantity * p_price;
 
     elsif p_order_type in ('TAKE_PROFIT', 'STOP_LOSS') then
@@ -85,19 +85,29 @@ begin
                 p_order_type;
         end if;
 
-        -- Validate position ownership & quantity
-        select quantity
-        into v_position_qty
+        -- Validate referenced position
+        select quantity, side
+        into v_position_qty, v_position_side
         from positions
         where id = p_position_id
           and game_id = p_game_id
           and player_id = p_player_id
-          and symbol = p_symbol;
+          and symbol = p_symbol
+          and status = 'open';
 
-        if v_position_qty is null
-           or v_position_qty < p_quantity then
+        if v_position_qty is null then
+            raise exception 'Referenced position not found or closed';
+        end if;
+
+        if p_quantity > v_position_qty then
             raise exception
-                'Insufficient position quantity for % order',
+                'TP/SL quantity exceeds position quantity';
+        end if;
+
+        -- TP/SL must CLOSE the position directionally
+        if p_side = v_position_side then
+            raise exception
+                '% orders must close the position, not extend it',
                 p_order_type;
         end if;
 
@@ -111,7 +121,7 @@ begin
     ------------------------------------------------------------------
     -- 4. BUY-side balance handling (MARKET / LIMIT only)
     ------------------------------------------------------------------
-    if p_side = 'buy'
+    if p_side = 'BUY'
        and p_order_type in ('MARKET', 'LIMIT') then
 
         select balance
