@@ -39,11 +39,16 @@ export async function executeGameTick(
   const supabase = createSupabaseClient(env);
   
   // 1. Fetch price data from Finnhub API
-  // Use Binance crypto symbols (format: EXCHANGE:SYMBOL)
+  // Crypto uses EXCHANGE:SYMBOL format (e.g., BINANCE:BTCUSDT)
+  // US stocks use plain ticker symbol (e.g., AAPL, TSLA)
   // Map: normalized symbol (for DB) -> Finnhub symbol (for API)
   const symbolMap: Record<string, string> = {
     'BTC': 'BINANCE:BTCUSDT',
     'ETH': 'BINANCE:ETHUSDT',
+    'AAPL': 'AAPL',
+    'TSLA': 'TSLA',
+    'MSFT': 'MSFT',
+    'SPY': 'SPY',
   };
   const normalizedSymbols = Object.keys(symbolMap);
   const finnhubSymbols = normalizedSymbols.map(s => symbolMap[s]);
