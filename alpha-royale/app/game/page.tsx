@@ -2,6 +2,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
+import toast from 'react-hot-toast';
 import { supabase } from '../auth/supabaseClient/supabaseClient';
 import { orderAPI, positionAPI, gameAPI, priceAPI, equityAPI } from '../lib/api';
 import { subscribeToGamePlayers, subscribeToPositions, subscribeToPrices, subscribeToEquityHistory } from '../lib/subscriptions';
@@ -291,12 +292,12 @@ function GamePageContent() {
     if (!gameId || !userId) return;
 
     if (!amount) {
-      alert('Please enter a quantity');
+      toast.error('Please enter a quantity');
       return;
     }
 
     if (orderType === 'LIMIT' && !limitPrice) {
-      alert('Please enter a limit price');
+      toast.error('Please enter a limit price');
       return;
     }
 
@@ -315,7 +316,7 @@ function GamePageContent() {
       });
 
       if (!result.order) {
-        alert('Failed to place order: ' + result.error);
+        toast.error('Failed to place order: ' + result.error);
         setLoading(false);
         return;
       }
@@ -323,9 +324,9 @@ function GamePageContent() {
       // Reset form
       setAmount('');
       setLimitPrice('');
-      alert('Order placed! Click "Process Orders" to execute it.');
+      toast.success('Order placed! Click "Process Orders" to execute it.');
     } catch (error: any) {
-      alert('Error placing order: ' + error.message);
+      toast.error('Error placing order: ' + error.message);
     }
 
     setLoading(false);
@@ -333,10 +334,6 @@ function GamePageContent() {
 
   async function handleCancelOrder(orderId: string) {
     if (!userId) return;
-    
-    if (!confirm('Are you sure you want to cancel this order?')) {
-      return;
-    }
 
     setLoading(true);
     const result = await orderAPI.cancelOrder(orderId, userId);
@@ -344,8 +341,9 @@ function GamePageContent() {
 
     if (result.order) {
       loadOrders(gameId!, userId);
+      toast.success('Order cancelled');
     } else {
-      alert('Failed to cancel order: ' + result.error);
+      toast.error('Failed to cancel order: ' + result.error);
     }
   }
 
@@ -384,7 +382,7 @@ function GamePageContent() {
     const quantity = type === 'TAKE_PROFIT' ? newTpQuantity : newSlQuantity;
 
     if (!triggerPrice) {
-      alert('Please enter a trigger price');
+      toast.error('Please enter a trigger price');
       return;
     }
 
@@ -411,22 +409,18 @@ function GamePageContent() {
           setNewSlTriggerPrice('');
           setNewSlQuantity('');
         }
-        alert(`${type === 'TAKE_PROFIT' ? 'Take Profit' : 'Stop Loss'} order created successfully`);
+        toast.success(`${type === 'TAKE_PROFIT' ? 'Take Profit' : 'Stop Loss'} order created successfully`);
       } else {
-        alert('Failed to create order: ' + result.error);
+        toast.error('Failed to create order: ' + result.error);
       }
     } catch (error: any) {
-      alert('Error creating order: ' + error.message);
+      toast.error('Error creating order: ' + error.message);
     }
     setLoading(false);
   }
 
   async function handleDeleteTpSl(orderId: string) {
     if (!userId) return;
-    
-    if (!confirm('Are you sure you want to cancel this TP/SL order?')) {
-      return;
-    }
 
     setLoading(true);
     const result = await orderAPI.cancelOrder(orderId, userId);
@@ -434,9 +428,9 @@ function GamePageContent() {
 
     if (result.order && selectedPositionForTpSl) {
       await loadTpSlOrdersForPosition(selectedPositionForTpSl);
-      alert('TP/SL order cancelled');
+      toast.success('TP/SL order cancelled');
     } else {
-      alert('Failed to cancel order: ' + result.error);
+      toast.error('Failed to cancel order: ' + result.error);
     }
   }
 
@@ -454,7 +448,7 @@ function GamePageContent() {
     if (!editingOrderId || !userId) return;
 
     if (!editTriggerPrice) {
-      alert('Please enter a trigger price');
+      toast.error('Please enter a trigger price');
       return;
     }
 
@@ -474,9 +468,9 @@ function GamePageContent() {
       setEditingOrderId(null);
       setEditTriggerPrice('');
       setEditQuantity('');
-      alert('TP/SL order updated successfully');
+      toast.success('TP/SL order updated successfully');
     } else {
-      alert('Failed to update order: ' + result.error);
+      toast.error('Failed to update order: ' + result.error);
     }
   }
 
@@ -505,17 +499,17 @@ function GamePageContent() {
     if (!position) return;
 
     if (!closeQuantity) {
-      alert('Please enter a quantity');
+      toast.error('Please enter a quantity');
       return;
     }
 
     if (closeOrderType === 'LIMIT' && !closeLimitPrice) {
-      alert('Please enter a limit price');
+      toast.error('Please enter a limit price');
       return;
     }
 
     if (parseFloat(closeQuantity) > parseFloat(position.quantity.toString())) {
-      alert(`Quantity cannot exceed position size: ${position.quantity}`);
+      toast.error(`Quantity cannot exceed position size: ${position.quantity}`);
       return;
     }
 
@@ -533,13 +527,13 @@ function GamePageContent() {
       });
 
       if (result.order) {
-        alert('Close order placed! Click "Process Orders" to execute it.');
+        toast.success('Close order placed! Click "Process Orders" to execute it.');
         handleCloseModal();
       } else {
-        alert('Failed to place close order: ' + result.error);
+        toast.error('Failed to place close order: ' + result.error);
       }
     } catch (error: any) {
-      alert('Error placing close order: ' + error.message);
+      toast.error('Error placing close order: ' + error.message);
     }
 
     setLoading(false);
@@ -551,12 +545,12 @@ function GamePageContent() {
       const response = await fetch('http://localhost:8787/trigger');
       const result = await response.json();
       if (result.success) {
-        alert('Orders processed! Check your positions.');
+        toast.success('Orders processed! Check your positions.');
       } else {
-        alert('Failed to process orders');
+        toast.error('Failed to process orders');
       }
     } catch (error) {
-      alert('Error processing orders: ' + error);
+      toast.error('Error processing orders: ' + error);
     }
     setLoading(false);
   }

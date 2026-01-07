@@ -3,6 +3,7 @@ import { useRouter } from "next/navigation"
 import { supabase } from "../../auth/supabaseClient/supabaseClient";
 import { useEffect, useState } from "react";
 import Image from "next/image";
+import toast from 'react-hot-toast';
 import { gameAPI, statsAPI } from "../../lib/api";
 
 interface UserStats {
@@ -66,7 +67,7 @@ export default function HomeScreen() {
         if (result.game) {
             router.push(`/game?id=${result.game.id}`);
         } else {
-            alert('Failed to create game: ' + result.error);
+            toast.error('Failed to create game: ' + result.error);
         }
     }
 
@@ -78,7 +79,7 @@ export default function HomeScreen() {
         if (result.game) {
             router.push(`/game?id=${joinGameId}`);
         } else {
-            alert('Failed to join game: ' + result.error);
+            toast.error('Failed to join game: ' + result.error);
         }
     }
 
