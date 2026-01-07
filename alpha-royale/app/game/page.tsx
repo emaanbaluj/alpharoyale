@@ -35,7 +35,7 @@ export default function GamePage() {
 
   const [symbol, setSymbol] = useState('BTC');
   const [amount, setAmount] = useState('');
-  const [orderType, setOrderType] = useState('buy');
+  const [orderSide, setOrderSide] = useState('buy');
   const [userId, setUserId] = useState<string | null>(null);
   const [myBalance, setMyBalance] = useState(10000);
   const [opponentBalance, setOpponentBalance] = useState(10000);
@@ -46,6 +46,12 @@ export default function GamePage() {
   const [myEquityChartData, setMyEquityChartData] = useState<ChartUnit[]>([]);
   const [oppEquityChartData, setOppEquityChartData] = useState<ChartUnit[]>([]);  // opponent equity curve
   const [showOppEquityCurve, setShowOppEquityCurve] = useState<boolean>(false); 
+  const [orderType, setOrderType] = useState<'MARKET' | 'STOP_LOSS' | 'TAKE_PROFIT'>('MARKET');
+  const [selectedPositionId, setSelectedPositionId] = useState<string | null>(null);
+  const [triggerPrice, setTriggerPrice] = useState('');
+  const selectedPosition = positions.find(p => p.id === selectedPositionId);
+
+
 
   const addDataPoints = (dataPoints: { myValue: number; oppValue: number; time: string }[]) => {
     const myNewEntries: ChartUnit[] = dataPoints.map(dp => ({
@@ -153,24 +159,67 @@ export default function GamePage() {
   }
 
   async function handlePlaceOrder() {
-    if (!gameId || !userId || !amount) return;
+    if (!gameId || !userId) return;
+
+    if (orderType !== 'MARKET') {
+      if (!selectedPositionId) {
+        alert('Please select a position');
+        return;
+      }
+      if (!triggerPrice) {
+        alert('Please enter a trigger price');
+        return;
+      }
+    }
+
+    const position = positions.find(p => p.id === selectedPositionId);
+
+    const finalSymbol =
+      orderType === 'MARKET' ? symbol : position?.symbol;
+
+    const finalSide =
+      orderType === 'MARKET'
+        ? orderSide.toUpperCase()
+        : position?.side === 'BUY'
+          ? 'SELL'
+          : 'BUY';
+
+    const finalQuantity =
+      amount
+        ? parseFloat(amount)
+        : position?.quantity;
+
     setLoading(true);
+
     const result = await orderAPI.placeOrder({
       gameId,
       playerId: userId,
-      symbol,
-      orderType: 'MARKET',
-      side: orderType.toUpperCase(),
-      quantity: parseFloat(amount)
+      symbol: finalSymbol!,
+      orderType: orderType,
+      side: finalSide!,
+      quantity: finalQuantity!,
+      triggerPrice:
+        orderType !== 'MARKET'
+          ? parseFloat(triggerPrice)
+          : undefined,
+      positionId:
+        orderType !== 'MARKET'
+          ? selectedPositionId ?? undefined // if selectedPositionId is null, send undefined
+          : undefined
     });
+
     setLoading(false);
+
     if (result.order) {
       setAmount('');
-      alert('Order placed! Waiting for execution...');
+      setTriggerPrice('');
+      setSelectedPositionId(null);
+      alert('Order placed!');
     } else {
       alert('Failed to place order: ' + result.error);
     }
   }
+
 
   if (!marketData) return <div>Loading...</div>;
 
@@ -223,36 +272,82 @@ export default function GamePage() {
           <div className="col-span-2">
             <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
               <h3 className="font-bold mb-3 text-white">Place Order</h3>
-              <select 
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value)}
+              {orderType === 'MARKET' && (
+                <select
+                  value={symbol}
+                  onChange={(e) => setSymbol(e.target.value)}
+                  className="w-full p-2 bg-gray-900 border border-gray-700 text-white mb-2"
+                >
+                  <option>BTC</option>
+                  <option>ETH</option>
+                  <option>AAPL</option>
+                </select>
+              )}
+              <select
+                value={orderType}
+                onChange={(e) => setOrderType(e.target.value as any)}
                 className="w-full p-2 bg-gray-900 border border-gray-700 text-white mb-2"
               >
-                <option>BTC</option>
-                <option>ETH</option>
-                <option>AAPL</option>
+                <option value="MARKET">Market</option>
+                <option value="STOP_LOSS">Stop Loss</option>
+                <option value="TAKE_PROFIT">Take Profit</option>
               </select>
-              <input 
+              {orderType !== 'MARKET' && (
+                <select
+                  value={selectedPositionId ?? ''}
+                  onChange={(e) => setSelectedPositionId(e.target.value)}
+                  className="w-full p-2 bg-gray-900 border border-gray-700 text-white mb-2"
+                >
+                  <option value="">Select Position</option>
+                  {positions.map((pos) => (
+                    <option key={pos.id} value={pos.id}>
+                      {pos.symbol} • {pos.side} • Qty {pos.quantity}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {orderType !== 'MARKET' && (
+                <input
+                  type="number"
+                  placeholder={
+                    orderType === 'TAKE_PROFIT'
+                      ? 'Take Profit Price'
+                      : 'Stop Loss Price'
+                  }
+                  value={triggerPrice}
+                  onChange={(e) => setTriggerPrice(e.target.value)}
+                  className="w-full p-2 bg-gray-900 border border-gray-700 text-white mb-2"
+                />
+              )}
+
+              <input
                 type="number"
-                placeholder="Quantity"
+                placeholder={
+                  orderType === 'MARKET'
+                    ? 'Quantity'
+                    : `Quantity (max ${selectedPosition?.quantity ?? '-'})`
+                }
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 className="w-full p-2 bg-gray-900 border border-gray-700 text-white mb-2"
               />
-              <div className="flex gap-2 mb-2">
-                <button 
-                  onClick={() => setOrderType('buy')}
-                  className={`flex-1 p-2 ${orderType === 'buy' ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300'}`}
-                >
-                  Buy
-                </button>
-                <button 
-                  onClick={() => setOrderType('sell')}
-                  className={`flex-1 p-2 ${orderType === 'sell' ? 'bg-red-600 text-white' : 'bg-gray-700 text-gray-300'}`}
-                >
-                  Sell
-                </button>
-              </div>
+
+              {orderType === 'MARKET' && (
+                <div className="flex gap-2 mb-2">
+                  <button 
+                    onClick={() => setOrderSide('buy')}
+                    className={`flex-1 p-2 ${orderSide === 'buy' ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300'}`}
+                  >
+                    Buy
+                  </button>
+                  <button 
+                    onClick={() => setOrderSide('sell')}
+                    className={`flex-1 p-2 ${orderSide === 'sell' ? 'bg-red-600 text-white' : 'bg-gray-700 text-gray-300'}`}
+                  >
+                    Sell
+                  </button>
+                </div>
+              )}
               <button 
                 className="w-full p-2 bg-blue-600 text-white disabled:opacity-50"
                 onClick={handlePlaceOrder}
