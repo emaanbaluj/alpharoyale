@@ -37,8 +37,8 @@ export async function POST(request: Request) {
     .insert({
       game_id: game.id,
       user_id: userId,
-      balance: 10000.00,
-      equity: 10000.00
+      balance: game.initial_balance,
+      equity: game.initial_balance
     });
 
   if (playerError) {

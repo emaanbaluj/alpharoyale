@@ -119,7 +119,9 @@ begin
     end if;
 
     ------------------------------------------------------------------
-    -- 4. BUY-side balance handling (MARKET / LIMIT only)
+    -- 4. BUY-side balance validation (MARKET / LIMIT only)
+    -- NOTE: Balance is NOT deducted here - it will be deducted when the order is executed.
+    -- This allows LIMIT orders to be placed without reserving balance until execution.
     ------------------------------------------------------------------
     if p_side = 'BUY'
        and p_order_type in ('MARKET', 'LIMIT') then
@@ -128,21 +130,16 @@ begin
         into v_balance
         from game_players
         where game_id = p_game_id
-          and user_id = p_player_id
-        for update;
+          and user_id = p_player_id;
 
         if v_balance is null then
             raise exception 'Balance not found for player %', p_player_id;
         end if;
 
+        -- Validate sufficient balance, but don't deduct yet
         if v_balance < v_cost then
             raise exception 'Insufficient balance';
         end if;
-
-        update game_players
-        set balance = balance - v_cost
-        where game_id = p_game_id
-          and user_id = p_player_id;
     end if;
 
     ------------------------------------------------------------------
