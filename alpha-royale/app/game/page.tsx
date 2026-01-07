@@ -2,8 +2,8 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '../auth/supabaseClient/supabaseClient';
-import { orderAPI, positionAPI, gameAPI } from '../lib/api';
-import { subscribeToGamePlayers, subscribeToPositions } from '../lib/subscriptions';
+import { orderAPI, positionAPI, gameAPI, priceAPI, equityAPI } from '../lib/api';
+import { subscribeToGamePlayers, subscribeToPositions, subscribeToPrices, subscribeToEquityHistory } from '../lib/subscriptions';
 import { PriceChart } from './charts/PriceChart';
 
 interface Position {
@@ -49,70 +49,66 @@ export default function GamePage() {
   const [orderType, setOrderType] = useState<'MARKET' | 'STOP_LOSS' | 'TAKE_PROFIT'>('MARKET');
   const [selectedPositionId, setSelectedPositionId] = useState<string | null>(null);
   const [triggerPrice, setTriggerPrice] = useState('');
+  const [latestPrices, setLatestPrices] = useState<Record<string, number>>({});
+  const [opponentId, setOpponentId] = useState<string | null>(null);
   const selectedPosition = positions.find(p => p.id === selectedPositionId);
 
+  // Load price history for selected ticker
+  useEffect(() => {
+    loadPriceHistory(selectedChartTicker);
+  }, [selectedChartTicker]);
 
-
-  const addDataPoints = (dataPoints: { myValue: number; oppValue: number; time: string }[]) => {
-    const myNewEntries: ChartUnit[] = dataPoints.map(dp => ({
-      time: dp.time,
-      value: dp.myValue,
-    }));
-    const oppNewEntries: ChartUnit[] = dataPoints.map(dp => ({
-      time: dp.time,
-      value: dp.oppValue,
-    }));
-    
-    setMyEquityChartData(prev => [...prev, ...myNewEntries]);
-    setOppEquityChartData(prev => [...prev, ...oppNewEntries]);
-  };
-
-  // tejas: i chatgpt generated this to fabricate data so we can test
-  // it generates a data point every 20 seconds -----------------------
-  const generateTickerData = (ticker: CompatibleTickers): TickerPriceData => {
-    const points: ChartUnit[] = [];
-    const startTime = new Date();
-    const basePrices = { ETH: 2500, BTC: 65000, AAPL: 190 };
-    let currentPrice = basePrices[ticker];
-    for (let i = 0; i < 360; i++) {
-      const time = new Date(startTime.getTime() - i * 20000);
-      const variance = currentPrice * (Math.random() * 0.001 - 0.0005);
-      currentPrice += variance;
-
-      points.push({
-        time: time.toISOString(),
-        value: parseFloat(currentPrice.toFixed(2))
-      });
-    }
-
-    return {
-      ticker,
-      price: points.reverse()
+  // Load latest prices on mount and set up subscription
+  useEffect(() => {
+    const initializePrices = async () => {
+      const { prices } = await priceAPI.getLatestPrices();
+      
+      // If no prices loaded, trigger worker to fetch initial prices
+      if (!prices || Object.keys(prices).length === 0) {
+        console.log('No prices found, triggering worker to fetch initial prices...');
+        try {
+          await fetch('http://localhost:8787/trigger');
+          // Wait a bit then reload prices
+          setTimeout(async () => {
+            const { prices: newPrices } = await priceAPI.getLatestPrices();
+            if (newPrices) setLatestPrices(newPrices);
+          }, 2000);
+        } catch (error) {
+          console.error('Failed to trigger worker:', error);
+        }
+      } else {
+        setLatestPrices(prices);
+      }
     };
-  };
-  useEffect(() => {
-    const initialData: Record<string, TickerPriceData> = {};
-    COMPATIBLETICKERS.forEach(ticker => {
-      initialData[ticker] = generateTickerData(ticker);
+    
+    initializePrices();
+    
+    const unsubPrices = subscribeToPrices((payload) => {
+      loadLatestPrices();
+      loadPriceHistory(selectedChartTicker);
     });
-    setMarketData(initialData);
-  }, []);
-  // ------------------------------------------------------------------
 
-  // tejas: fake data for equity chart for testing --------------------
-  useEffect(() => {
-    addDataPoints([
-      { myValue: 10000, oppValue: 10000, time: "2026-01-05T12:00:00Z" },
-      { myValue: 10500, oppValue: 9900, time: "2026-01-05T12:00:20Z" },
-      { myValue: 10700, oppValue: 9990, time: "2026-01-05T12:00:40Z" },
-      { myValue: 10800, oppValue: 11000, time: "2026-01-05T12:01:00Z" },
-      { myValue: 10600, oppValue: 12000, time: "2026-01-05T12:01:20Z" },
-      { myValue: 10750, oppValue: 12500, time: "2026-01-05T12:01:40Z" },
-      { myValue: 10900, oppValue: 12800, time: "2026-01-05T12:02:00Z" },
-      { myValue: 11000, oppValue: 12900, time: "2026-01-05T12:02:20Z" },
-    ]);
-  }, []);
-  // ------------------------------------------------------------------
+    return () => {
+      unsubPrices();
+    };
+  }, [selectedChartTicker]);
+
+  async function loadPriceHistory(ticker: string) {
+    const { prices } = await priceAPI.getPriceHistory(ticker, 360);
+    if (prices) {
+      setMarketData(prev => ({
+        ...prev,
+        [ticker]: { ticker, price: prices }
+      }));
+    }
+  }
+
+  async function loadLatestPrices() {
+    const { prices } = await priceAPI.getLatestPrices();
+    if (prices) {
+      setLatestPrices(prices);
+    }
+  }
   
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -129,18 +125,37 @@ export default function GamePage() {
     if (!gameId || !userId) return;
 
     const unsubPlayers = subscribeToGamePlayers(gameId, (payload) => {
+      console.log('Game players updated:', payload);
       loadGameData(gameId, userId);
     });
 
     const unsubPositions = subscribeToPositions(gameId, userId, (payload) => {
+      console.log('Positions updated:', payload);
       loadPositions(gameId, userId);
     });
+
+    const unsubEquity = subscribeToEquityHistory(gameId, (payload) => {
+      console.log('Equity history updated:', payload);
+      loadEquityHistory(gameId, userId);
+      if (opponentId) {
+        loadEquityHistory(gameId, opponentId, true);
+      }
+    });
+
+    // Add polling fallback to ensure UI stays updated (every 3 seconds)
+    const pollInterval = setInterval(() => {
+      loadGameData(gameId, userId);
+      loadPositions(gameId, userId);
+      loadLatestPrices();
+    }, 3000);
 
     return () => {
       unsubPlayers();
       unsubPositions();
+      unsubEquity();
+      clearInterval(pollInterval);
     };
-  }, [gameId, userId]);
+  }, [gameId, userId, opponentId]);
 
   async function loadGameData(gId: string, uId: string) {
     const { game, players } = await gameAPI.getGame(gId);
@@ -148,14 +163,35 @@ export default function GamePage() {
       const me = players.find((p: any) => p.user_id === uId);
       const opponent = players.find((p: any) => p.user_id !== uId);
       if (me) setMyBalance(me.equity);
-      if (opponent) setOpponentBalance(opponent.equity);
+      if (opponent) {
+        setOpponentBalance(opponent.equity);
+        setOpponentId(opponent.user_id);
+      }
     }
     loadPositions(gId, uId);
+    loadEquityHistory(gId, uId);
+    if (players) {
+      const opponent = players.find((p: any) => p.user_id !== uId);
+      if (opponent) {
+        loadEquityHistory(gId, opponent.user_id, true);
+      }
+    }
   }
 
   async function loadPositions(gId: string, uId: string) {
     const { positions: pos } = await positionAPI.getPositions(gId, uId);
     if (pos) setPositions(pos);
+  }
+
+  async function loadEquityHistory(gId: string, playerId: string, isOpponent: boolean = false) {
+    const { history } = await equityAPI.getEquityHistory(gId, playerId);
+    if (history) {
+      if (isOpponent) {
+        setOppEquityChartData(history);
+      } else {
+        setMyEquityChartData(history);
+      }
+    }
   }
 
   async function handlePlaceOrder() {
@@ -214,10 +250,26 @@ export default function GamePage() {
       setAmount('');
       setTriggerPrice('');
       setSelectedPositionId(null);
-      alert('Order placed!');
+      alert('Order placed! Click "Process Orders" to execute it.');
     } else {
       alert('Failed to place order: ' + result.error);
     }
+  }
+
+  async function handleProcessOrders() {
+    setLoading(true);
+    try {
+      const response = await fetch('http://localhost:8787/trigger');
+      const result = await response.json();
+      if (result.success) {
+        alert('Orders processed! Check your positions.');
+      } else {
+        alert('Failed to process orders');
+      }
+    } catch (error) {
+      alert('Error processing orders: ' + error);
+    }
+    setLoading(false);
   }
 
 
@@ -243,7 +295,7 @@ export default function GamePage() {
                 <button key={t} onClick={() => setSelectedChartTicker(t)} className="w-full">
                   <div className="flex justify-between w-full">
                     <span>{t}</span>
-                    <span>$150.00</span>
+                    <span>${latestPrices[t]?.toFixed(2) || '-.--'}</span>
                   </div>
                 </button>
               ))}
@@ -354,6 +406,14 @@ export default function GamePage() {
                 disabled={loading || !amount}
               >
                 {loading ? 'Placing...' : 'Submit Order'}
+              </button>
+              
+              <button 
+                className="w-full p-2 mt-2 bg-purple-600 text-white disabled:opacity-50"
+                onClick={handleProcessOrders}
+                disabled={loading}
+              >
+                {loading ? 'Processing...' : 'Process Orders'}
               </button>
             </div>
 
