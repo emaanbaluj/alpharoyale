@@ -84,13 +84,13 @@ export default function HomeScreen() {
 
     return(
         <div className="flex min-h-screen">
-            <div className="w-80 bg-gray-900 text-white p-6">
-                <Image src="/alpha_royal_logo.png" alt="Logo" width={120} height={120} className="mb-6 mx-auto" />
+            <div className="w-80 bg-[#13141a] border-r border-[#1e1f25] text-white p-6">
+                <Image src="/alpha_royal_logo.png" alt="Logo" width={150} height={150} className="mb-6 mx-auto" />
                 <p className="mb-4 text-gray-300 text-sm truncate">{email}</p>
                 
                 <div className="space-y-3">
                     <button 
-                        className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 rounded font-medium disabled:opacity-50"
+                        className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 rounded font-medium disabled:opacity-50 transition-colors"
                         onClick={handleCreateGame}
                         disabled={loading}
                     >
@@ -100,10 +100,10 @@ export default function HomeScreen() {
                         <input
                             id="joinGameId" type="text" value={joinGameId} placeholder="Enter Game ID"
                             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setJoinGameId(e.target.value)}
-                            className="w-50 px-4 py-2 bg-gray-800 rounded font-medium text-white"
+                            className="w-50 px-4 py-2 bg-[#0a0b0d] border border-[#1e1f25] rounded font-medium text-white focus:border-blue-500 focus:outline-none"
                         />
                         <button 
-                            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded font-medium disabled:opacity-50"
+                            className="px-4 py-2 bg-[#1e1f25] hover:bg-[#25262d] rounded font-medium disabled:opacity-50 transition-colors"
                             onClick={handleJoinGame}
                             disabled={loading || !joinGameId}
                         >
@@ -113,69 +113,112 @@ export default function HomeScreen() {
                 </div>
 
                 <button 
-                    className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded font-medium mt-4" 
+                    className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded font-medium mt-4 transition-colors" 
                     onClick={handleLogout}
                 >
                     Log Out
                 </button>
             </div>
             
-            <div className="flex-1 bg-gray-800 p-8">
-                <h2 className="text-3xl font-bold mb-4 text-white">Welcome to Alpha Royale</h2>
-                <p className="text-gray-400 mb-6">Ready to test your trading skills?</p>
+            <div className="flex-1 bg-[#0a0b0d] p-8">
+                <h2 className="text-3xl font-bold mb-2 text-white">Welcome to Alpha Royale</h2>
+                <p className="text-gray-400 mb-8 max-w-3xl leading-relaxed">
+                    A real-time 1v1 trading simulation where two players compete head-to-head using live market data. 
+                    Each match gives you a virtual balance to buy and sell stocks. 
+                    The player with the highest portfolio value at the end wins. 
+                    Trade smart, manage risk, and see who comes out on top.
+                </p>
                 
                 <div className="grid grid-cols-3 gap-5 items-start">
 
                     <div className="flex flex-col gap-4">
-                        <div className="border border-gray-700 bg-gray-900 p-4">
-                            <h3 className="font-bold mb-2 text-white">Your Stats</h3>
-                            <div className="text-sm space-y-1 text-gray-300">
-                                <div>Games Played: {userStats.gamesPlayed}</div>
-                                <div>Wins: {userStats.wins}</div>
-                                <div>Win Rate: {userStats.winRate}%</div>
+                        {/* Your Stats Card */}
+                        <div className="border border-[#1e1f25] bg-[#13141a] rounded-lg p-5 hover:border-[#25262d] transition-colors">
+                            <h3 className="text-base font-bold text-white uppercase tracking-wider mb-4 border-b border-[#1e1f25] pb-2">Your Stats</h3>
+                            <div className="space-y-3">
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm text-gray-400">Games Played</span>
+                                    <span className="text-lg font-mono font-bold text-white">{userStats.gamesPlayed}</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm text-gray-400">Wins</span>
+                                    <span className="text-lg font-mono font-bold text-green-400">{userStats.wins}</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm text-gray-400">Win Rate</span>
+                                    <span className="text-lg font-mono font-bold text-blue-400">{userStats.winRate}%</span>
+                                </div>
                             </div>
                         </div>
-                        <div className="border border-gray-700 bg-gray-900 p-4">
-                            <h3 className="font-bold mb-2 text-white">Start a New Game</h3>
-                            <p className="text-sm text-gray-400 mb-3">
+
+                        {/* How to Play Cards */}
+                        <div className="border border-[#1e1f25] bg-[#13141a] rounded-lg p-5">
+                            <h3 className="text-sm font-bold text-white uppercase tracking-wider mb-3">Start a New Game</h3>
+                            <p className="text-sm text-gray-400 leading-relaxed">
                                 Click "Start Game" to create a 1v1 trading match. Share the game ID with a friend.
                             </p>
                         </div> 
-                        <div className="border border-gray-700 bg-gray-900 p-4">
-                            <h3 className="font-bold mb-2 text-white">Join a Game</h3>
-                            <p className="text-sm text-gray-400 mb-3">
+                        <div className="border border-[#1e1f25] bg-[#13141a] rounded-lg p-5">
+                            <h3 className="text-sm font-bold text-white uppercase tracking-wider mb-3">Join a Game</h3>
+                            <p className="text-sm text-gray-400 leading-relaxed">
                                 Enter the Game ID and click "Join" to enter a 1v1 trading match.
                             </p>
                         </div> 
                     </div>
-                    <div>
-                       <div className="border border-gray-700 bg-gray-900 p-4">
-                        <h3 className="font-bold mb-2 text-white">Ongoing Games</h3>
-                        <div className="text-sm space-y-1">
-                            <p className="text-sm text-gray-400 mb-3">
-                                Coming soon - view your active games here
-                            </p>
-                        </div>
-                    </div>  
 
-                    </div>
-                    <div className="border border-gray-700 bg-gray-900 p-4">
-                        <h3 className="font-bold mb-2 text-white">Global Leaderboard</h3>
-                        <div className="text-sm space-y-1">
-                            {leaderboard.length === 0 ? (
-                                <p className="text-sm text-gray-400 mb-3">
-                                    No games played yet
+                    {/* Ongoing Games Card */}
+                    <div>
+                       <div className="border border-[#1e1f25] bg-[#13141a] rounded-lg p-5 h-full">
+                            <h3 className="text-base font-bold text-white uppercase tracking-wider mb-4 border-b border-[#1e1f25] pb-2">Ongoing Games</h3>
+                            <div className="flex items-center justify-center h-32">
+                                <p className="text-sm text-gray-500 italic">
+                                    Coming soon - view your active games here
                                 </p>
+                            </div>
+                        </div>  
+                    </div>
+
+                    {/* Global Leaderboard Card */}
+                    <div className="border border-[#1e1f25] bg-[#13141a] rounded-lg p-5">
+                        <h3 className="text-base font-bold text-white uppercase tracking-wider mb-4 border-b border-[#1e1f25] pb-2">Global Leaderboard</h3>
+                        <div className="text-sm">
+                            {leaderboard.length === 0 ? (
+                                <div className="flex items-center justify-center h-32">
+                                    <p className="text-sm text-gray-500 italic">
+                                        No games played yet
+                                    </p>
+                                </div>
                             ) : (
-                                <div className="space-y-2">
+                                <div className="space-y-2 max-h-96 overflow-y-auto">
                                     {leaderboard.map((player, idx) => (
-                                    <div key={player.userId} className="p-2 bg-gray-800 rounded">
-                                        <p className="text-sm text-gray-300 font-bold truncate">
-                                            {idx + 1}. User {player.userId.slice(0, 8)}...
-                                        </p>
-                                        <p className="text-xs text-gray-400">
-                                            {player.wins}W / {player.gamesPlayed}G - {player.winRate.toFixed(1)}%
-                                        </p>
+                                    <div key={player.userId} className="p-3 bg-[#0a0b0d] border border-[#1e1f25] rounded-lg hover:border-blue-500/50 transition-all group">
+                                        <div className="flex items-center justify-between mb-1">
+                                            <div className="flex items-center gap-3">
+                                                <span className={`text-lg font-bold ${
+                                                    idx === 0 ? 'text-yellow-400' :
+                                                    idx === 1 ? 'text-gray-300' :
+                                                    idx === 2 ? 'text-orange-400' :
+                                                    'text-blue-400'
+                                                }`}>
+                                                    #{idx + 1}
+                                                </span>
+                                                <span className="text-sm text-white font-medium truncate">
+                                                    User {player.userId.slice(0, 8)}...
+                                                </span>
+                                            </div>
+                                            <span className={`text-xs px-2 py-1 rounded ${
+                                                player.winRate >= 70 ? 'bg-green-900/30 text-green-400' :
+                                                player.winRate >= 50 ? 'bg-blue-900/30 text-blue-400' :
+                                                'bg-red-900/30 text-red-400'
+                                            }`}>
+                                                {player.winRate.toFixed(0)}%
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center gap-4 text-xs text-gray-400 font-mono ml-8">
+                                            <span>{player.wins} Wins</span>
+                                            <span>•</span>
+                                            <span>{player.gamesPlayed} Games</span>
+                                        </div>
                                     </div>
                                     ))}
                                 </div>

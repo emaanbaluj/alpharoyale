@@ -17,10 +17,10 @@ export default function AuthPage() {
   function goBack() {router.push('/');}
   
   return (
-    <div className="h-screen bg-black flex items-center justify-center">
+    <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
       <div className="max-w-md w-full px-6">
-        <button onClick={goBack} className="text-xs font-bold text-blue-400 hover:text-blue-500 mb-8"> <span>&#8592;</span> Go Back</button>
-        <Image src="/alpha_royal_logo.png" alt="Logo" width={200} height={200} className="mb-6 mx-auto" />
+        <button onClick={goBack} className="text-xs font-bold text-blue-400 hover:text-blue-500 mb-8 transition-colors"> <span>&#8592;</span> Go Back</button>
+        <Image src="/alpha_royal_logo.png" alt="Logo" width={250} height={250} className="mb-6 mx-auto" />
         <p className="text-gray-400 mb-8 text-center">Login or sign up to start trading</p>
 
         <div className={styles.authwrapper}>
