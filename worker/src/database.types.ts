@@ -114,6 +114,7 @@ export type Database = {
       games: {
         Row: {
           created_at: string | null
+          duration_minutes: number
           ended_at: string | null
           id: string
           initial_balance: number
@@ -126,6 +127,7 @@ export type Database = {
         }
         Insert: {
           created_at?: string | null
+          duration_minutes?: number
           ended_at?: string | null
           id?: string
           initial_balance?: number
@@ -138,6 +140,7 @@ export type Database = {
         }
         Update: {
           created_at?: string | null
+          duration_minutes?: number
           ended_at?: string | null
           id?: string
           initial_balance?: number
