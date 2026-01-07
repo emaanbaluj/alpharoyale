@@ -7,6 +7,7 @@ import { supabase } from '../auth/supabaseClient/supabaseClient';
 import { orderAPI, positionAPI, gameAPI, priceAPI, equityAPI } from '../lib/api';
 import { subscribeToGamePlayers, subscribeToPositions, subscribeToPrices, subscribeToEquityHistory } from '../lib/subscriptions';
 import { PriceChart } from './charts/PriceChart';
+import { CandlestickChart } from './charts/CandlestickChart';
 
 interface Position {
   id: string;
@@ -97,6 +98,20 @@ function GamePageContent() {
   const [editQuantity, setEditQuantity] = useState('');
   const selectedPosition = positions.find(p => p.id === selectedPositionId);
 
+  // Timer state
+  const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
+  const [gameEndTime, setGameEndTime] = useState<Date | null>(null);
+
+  // Price change tracking
+  const [previousPrices, setPreviousPrices] = useState<Record<string, number>>({});
+  const [priceChanges, setPriceChanges] = useState<Record<string, number>>({});
+
+  // Chart type
+  const [chartType, setChartType] = useState<'line' | 'candle'>('line');
+
+  // Previous PNL for animation
+  const [previousPnl, setPreviousPnl] = useState<Record<string, number>>({});
+
   // Load price history for selected ticker
   useEffect(() => {
     loadPriceHistory(selectedChartTicker);
@@ -150,10 +165,36 @@ function GamePageContent() {
   async function loadLatestPrices() {
     const { prices } = await priceAPI.getLatestPrices();
     if (prices) {
+      // Track price changes
+      const changes: Record<string, number> = {};
+      Object.keys(prices).forEach(ticker => {
+        if (previousPrices[ticker]) {
+          changes[ticker] = prices[ticker] - previousPrices[ticker];
+        }
+      });
+      setPriceChanges(changes);
+      setPreviousPrices(prices);
       setLatestPrices(prices);
     }
   }
   
+  // Timer effect
+  useEffect(() => {
+    if (!gameEndTime) return;
+
+    const updateTimer = () => {
+      const now = new Date().getTime();
+      const end = gameEndTime.getTime();
+      const remaining = Math.max(0, Math.floor((end - now) / 1000));
+      setTimeRemaining(remaining);
+    };
+
+    updateTimer();
+    const timerInterval = setInterval(updateTimer, 1000);
+
+    return () => clearInterval(timerInterval);
+  }, [gameEndTime]);
+
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (user) {
@@ -224,6 +265,23 @@ function GamePageContent() {
 
   async function loadGameData(gId: string, uId: string) {
     const { game, players } = await gameAPI.getGame(gId);
+    
+    // Set game end time for timer
+    if (game && game.started_at && game.duration_minutes) {
+      const startTime = new Date(game.started_at);
+      const endTime = new Date(startTime.getTime() + game.duration_minutes * 60000);
+      console.log('Game timer debug:', {
+        started_at: game.started_at,
+        duration_minutes: game.duration_minutes,
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString(),
+        now: new Date().toISOString()
+      });
+      setGameEndTime(endTime);
+    } else {
+      console.log('Missing game timer data:', { game, started_at: game?.started_at, duration_minutes: game?.duration_minutes });
+    }
+    
     if (players) {
       const me = players.find((p: any) => p.user_id === uId);
       const opponent = players.find((p: any) => p.user_id !== uId);
@@ -248,6 +306,13 @@ function GamePageContent() {
   async function loadPositions(gId: string, uId: string) {
     const { positions: pos } = await positionAPI.getPositions(gId, uId);
     if (pos) {
+      // Track PnL changes for animation
+      const newPnlMap: Record<string, number> = {};
+      pos.forEach(p => {
+        newPnlMap[p.id] = p.unrealized_pnl;
+      });
+      setPreviousPnl(newPnlMap);
+      
       setPositions(pos);
       // Load TP/SL orders for all positions to display status
       for (const position of pos) {
@@ -579,6 +644,21 @@ function GamePageContent() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          {/* Game Timer */}
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-[#1e1f25] rounded">
+            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {timeRemaining !== null ? (
+              <span className={`text-sm font-mono font-semibold ${
+                timeRemaining < 300 ? 'text-red-400' : timeRemaining < 600 ? 'text-yellow-400' : 'text-gray-300'
+              }`}>
+                {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}
+              </span>
+            ) : (
+              <span className="text-sm font-mono font-semibold text-gray-500">--:--</span>
+            )}
+          </div>
           <button className="px-3 py-1.5 bg-[#1e1f25] hover:bg-[#25262d] text-gray-300 text-sm rounded transition-colors">
             Settings
           </button>
@@ -603,7 +683,14 @@ function GamePageContent() {
                   }`}
                 >
                   <span className="text-white font-medium text-sm">{t}-USD</span>
-                  <span className="text-gray-300 font-mono text-sm">${latestPrices[t]?.toFixed(2) || '-.--'}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-300 font-mono text-sm">${latestPrices[t]?.toFixed(2) || '-.--'}</span>
+                    {priceChanges[t] !== undefined && priceChanges[t] !== 0 && (
+                      <span className={`text-xs font-mono ${priceChanges[t] > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {priceChanges[t] > 0 ? '↑' : '↓'} {Math.abs(priceChanges[t]).toFixed(2)}
+                      </span>
+                    )}
+                  </div>
                 </button>
               ))}
             </div>
@@ -625,9 +712,31 @@ function GamePageContent() {
               </select>
               <span className="text-gray-500 text-sm">${latestPrices[selectedChartTicker]?.toFixed(2) || '-.--'}</span>
             </div>
+            <div className="flex items-center gap-1 bg-[#1e1f25] p-1 rounded">
+              <button
+                onClick={() => setChartType('line')}
+                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                  chartType === 'line' ? 'bg-blue-500 text-white' : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Line
+              </button>
+              <button
+                onClick={() => setChartType('candle')}
+                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                  chartType === 'candle' ? 'bg-blue-500 text-white' : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Candle
+              </button>
+            </div>
           </div>
           <div className="flex-1 bg-[#0a0b0d] p-4">
-            <PriceChart data1={marketData[selectedChartTicker]?.price ?? []}/>
+            {chartType === 'line' ? (
+              <PriceChart data1={marketData[selectedChartTicker]?.price ?? []}/>
+            ) : (
+              <CandlestickChart data={marketData[selectedChartTicker]?.price ?? []}/>
+            )}
           </div>
 
           {/* Equity Comparison Chart */}
@@ -786,7 +895,15 @@ function GamePageContent() {
                                   <span className="text-gray-300 ml-1 font-mono">${positionValue.toFixed(2)}</span>
                                 </div>
                               </div>
-                              <div className={`text-sm font-mono ${isProfitable ? 'text-green-400' : 'text-red-400'}`}>
+                              <div className={`text-sm font-mono transition-all duration-300 ${
+                                isProfitable ? 'text-green-400' : 'text-red-400'
+                              } ${
+                                previousPnl[pos.id] !== undefined && previousPnl[pos.id] !== pos.unrealized_pnl
+                                  ? pos.unrealized_pnl > previousPnl[pos.id] 
+                                    ? 'animate-pulse-green' 
+                                    : 'animate-pulse-red'
+                                  : ''
+                              }`}>
                                 {isProfitable ? '+' : ''}${pos.unrealized_pnl?.toFixed(2) || '0.00'} ({isProfitable ? '+' : ''}{roePercent}%)
                               </div>
                             </div>
