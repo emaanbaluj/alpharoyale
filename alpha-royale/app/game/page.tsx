@@ -26,6 +26,8 @@ interface Order {
   trigger_price: number | null;
   status: string;
   position_id: string | null;
+  filled_price: number | null;
+  filled_at: string | null;
   created_at: string;
 }
 
@@ -78,6 +80,19 @@ function GamePageContent() {
   const [closeQuantity, setCloseQuantity] = useState('');
   const [closeLimitPrice, setCloseLimitPrice] = useState('');
   const [closingPositionId, setClosingPositionId] = useState<string | null>(null);
+  const [showCloseModal, setShowCloseModal] = useState(false);
+  const [selectedPositionForClose, setSelectedPositionForClose] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'orders' | 'positions' | 'history'>('orders');
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [showTpSlModal, setShowTpSlModal] = useState(false);
+  const [selectedPositionForTpSl, setSelectedPositionForTpSl] = useState<string | null>(null);
+  const [newTpTriggerPrice, setNewTpTriggerPrice] = useState('');
+  const [newTpQuantity, setNewTpQuantity] = useState('');
+  const [newSlTriggerPrice, setNewSlTriggerPrice] = useState('');
+  const [newSlQuantity, setNewSlQuantity] = useState('');
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+  const [editTriggerPrice, setEditTriggerPrice] = useState('');
+  const [editQuantity, setEditQuantity] = useState('');
   const selectedPosition = positions.find(p => p.id === selectedPositionId);
 
   // Load price history for selected ticker
@@ -182,6 +197,7 @@ function GamePageContent() {
         },
         () => {
           loadOrders(gameId, userId);
+          loadAllOrders(gameId, userId);
         }
       )
       .subscribe();
@@ -191,6 +207,7 @@ function GamePageContent() {
       loadGameData(gameId, userId);
       loadPositions(gameId, userId);
       loadOrders(gameId, userId);
+      loadAllOrders(gameId, userId);
       loadLatestPrices();
     }, 3000);
 
@@ -216,6 +233,7 @@ function GamePageContent() {
     }
     loadPositions(gId, uId);
     loadOrders(gId, uId);
+    loadAllOrders(gId, uId);
     loadEquityHistory(gId, uId);
     if (players) {
       const opponent = players.find((p: any) => p.user_id !== uId);
@@ -227,12 +245,23 @@ function GamePageContent() {
 
   async function loadPositions(gId: string, uId: string) {
     const { positions: pos } = await positionAPI.getPositions(gId, uId);
-    if (pos) setPositions(pos);
+    if (pos) {
+      setPositions(pos);
+      // Load TP/SL orders for all positions to display status
+      for (const position of pos) {
+        await loadTpSlOrdersForPosition(position.id);
+      }
+    }
   }
 
   async function loadOrders(gId: string, uId: string) {
     const { orders: ords } = await orderAPI.getOrders(gId, uId, 'pending');
     if (ords) setOrders(ords);
+  }
+
+  async function loadAllOrders(gId: string, uId: string) {
+    const { orders: ords } = await orderAPI.getOrders(gId, uId, 'all');
+    if (ords) setAllOrders(ords);
   }
 
   async function loadTpSlOrdersForPosition(positionId: string) {
@@ -319,46 +348,174 @@ function GamePageContent() {
     }
   }
 
-  async function handleEditTpSl(positionId: string) {
-    setEditingPositionId(positionId);
+  async function handleOpenTpSlModal(positionId: string) {
+    setSelectedPositionForTpSl(positionId);
+    setShowTpSlModal(true);
     await loadTpSlOrdersForPosition(positionId);
+    // Reset form fields
+    setNewTpTriggerPrice('');
+    setNewTpQuantity('');
+    setNewSlTriggerPrice('');
+    setNewSlQuantity('');
+    setEditingOrderId(null);
   }
 
-  async function handleUpdateTpSl(orderId: string, updates: { triggerPrice?: number; quantity?: number }) {
+  async function handleCloseTpSlModal() {
+    setShowTpSlModal(false);
+    setSelectedPositionForTpSl(null);
+    setEditingOrderId(null);
+    setEditingPositionId(null);
+    setNewTpTriggerPrice('');
+    setNewTpQuantity('');
+    setNewSlTriggerPrice('');
+    setNewSlQuantity('');
+    setEditTriggerPrice('');
+    setEditQuantity('');
+  }
+
+  async function handleCreateTpSl(type: 'TAKE_PROFIT' | 'STOP_LOSS') {
+    if (!selectedPositionForTpSl || !gameId || !userId) return;
+    
+    const position = positions.find(p => p.id === selectedPositionForTpSl);
+    if (!position) return;
+
+    const triggerPrice = type === 'TAKE_PROFIT' ? newTpTriggerPrice : newSlTriggerPrice;
+    const quantity = type === 'TAKE_PROFIT' ? newTpQuantity : newSlQuantity;
+
+    if (!triggerPrice) {
+      alert('Please enter a trigger price');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await orderAPI.placeOrder({
+        gameId,
+        playerId: userId,
+        symbol: position.symbol,
+        orderType: type,
+        side: 'SELL',
+        quantity: quantity ? parseFloat(quantity) : position.quantity,
+        triggerPrice: parseFloat(triggerPrice),
+        positionId: selectedPositionForTpSl,
+      });
+
+      if (result.order) {
+        await loadTpSlOrdersForPosition(selectedPositionForTpSl);
+        // Reset form
+        if (type === 'TAKE_PROFIT') {
+          setNewTpTriggerPrice('');
+          setNewTpQuantity('');
+        } else {
+          setNewSlTriggerPrice('');
+          setNewSlQuantity('');
+        }
+        alert(`${type === 'TAKE_PROFIT' ? 'Take Profit' : 'Stop Loss'} order created successfully`);
+      } else {
+        alert('Failed to create order: ' + result.error);
+      }
+    } catch (error: any) {
+      alert('Error creating order: ' + error.message);
+    }
+    setLoading(false);
+  }
+
+  async function handleDeleteTpSl(orderId: string) {
     if (!userId) return;
     
+    if (!confirm('Are you sure you want to cancel this TP/SL order?')) {
+      return;
+    }
+
     setLoading(true);
-    const result = await orderAPI.updateOrder(orderId, userId, updates);
+    const result = await orderAPI.cancelOrder(orderId, userId);
+    setLoading(false);
+
+    if (result.order && selectedPositionForTpSl) {
+      await loadTpSlOrdersForPosition(selectedPositionForTpSl);
+      alert('TP/SL order cancelled');
+    } else {
+      alert('Failed to cancel order: ' + result.error);
+    }
+  }
+
+  async function handleEditTpSlOrder(orderId: string) {
+    const orders = selectedPositionForTpSl ? positionTpSlOrders[selectedPositionForTpSl] || [] : [];
+    const order = orders.find(o => o.id === orderId);
+    if (order) {
+      setEditingOrderId(orderId);
+      setEditTriggerPrice(order.trigger_price?.toString() || '');
+      setEditQuantity(order.quantity.toString());
+    }
+  }
+
+  async function handleSaveTpSlEdit() {
+    if (!editingOrderId || !userId) return;
+
+    if (!editTriggerPrice) {
+      alert('Please enter a trigger price');
+      return;
+    }
+
+    setLoading(true);
+    const updates = {
+      triggerPrice: parseFloat(editTriggerPrice),
+      quantity: editQuantity ? parseFloat(editQuantity) : undefined,
+    };
+
+    const result = await orderAPI.updateOrder(editingOrderId, userId, updates);
     setLoading(false);
 
     if (result.order) {
-      if (editingPositionId) {
-        await loadTpSlOrdersForPosition(editingPositionId);
+      if (selectedPositionForTpSl) {
+        await loadTpSlOrdersForPosition(selectedPositionForTpSl);
       }
+      setEditingOrderId(null);
+      setEditTriggerPrice('');
+      setEditQuantity('');
       alert('TP/SL order updated successfully');
     } else {
       alert('Failed to update order: ' + result.error);
     }
   }
 
-  async function handleClosePosition(positionId: string, type: 'MARKET' | 'LIMIT') {
+  async function handleOpenCloseModal(positionId: string, type: 'MARKET' | 'LIMIT') {
     const position = positions.find(p => p.id === positionId);
-    if (!position || !gameId || !userId) return;
+    if (!position) return;
 
-    setClosingPositionId(positionId);
+    setSelectedPositionForClose(positionId);
     setCloseOrderType(type);
     setCloseQuantity(position.quantity.toString());
     setCloseLimitPrice('');
+    setShowCloseModal(true);
+  }
 
-    // For now, we'll show a prompt. In a full implementation, use a modal
-    const quantity = prompt(`Enter quantity to close (max: ${position.quantity}):`, position.quantity.toString());
-    if (!quantity) return;
+  async function handleCloseModal() {
+    setShowCloseModal(false);
+    setSelectedPositionForClose(null);
+    setCloseQuantity('');
+    setCloseLimitPrice('');
+  }
 
-    let limitPrice: string | undefined;
-    if (type === 'LIMIT') {
-      const limitPriceInput = prompt(`Enter limit price:`);
-      if (!limitPriceInput) return;
-      limitPrice = limitPriceInput;
+  async function handleClosePositionSubmit() {
+    if (!selectedPositionForClose || !gameId || !userId) return;
+
+    const position = positions.find(p => p.id === selectedPositionForClose);
+    if (!position) return;
+
+    if (!closeQuantity) {
+      alert('Please enter a quantity');
+      return;
+    }
+
+    if (closeOrderType === 'LIMIT' && !closeLimitPrice) {
+      alert('Please enter a limit price');
+      return;
+    }
+
+    if (parseFloat(closeQuantity) > parseFloat(position.quantity.toString())) {
+      alert(`Quantity cannot exceed position size: ${position.quantity}`);
+      return;
     }
 
     setLoading(true);
@@ -368,17 +525,15 @@ function GamePageContent() {
         gameId,
         playerId: userId,
         symbol: position.symbol,
-        orderType: type,
+        orderType: closeOrderType,
         side: 'SELL',
-        quantity: parseFloat(quantity),
-        price: limitPrice ? parseFloat(limitPrice) : undefined,
+        quantity: parseFloat(closeQuantity),
+        price: closeOrderType === 'LIMIT' && closeLimitPrice ? parseFloat(closeLimitPrice) : undefined,
       });
 
       if (result.order) {
         alert('Close order placed! Click "Process Orders" to execute it.');
-        setClosingPositionId(null);
-        setCloseQuantity('');
-        setCloseLimitPrice('');
+        handleCloseModal();
       } else {
         alert('Failed to place close order: ' + result.error);
       }
@@ -443,7 +598,7 @@ function GamePageContent() {
               </div>
             </div>
 
-            <div className="border border-gray-700 bg-gray-800 p-4">
+            <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
               <div className="flex justify-between">
                 <h2 className="font-bold mb-2 text-white">Equity Comparison</h2>
                 <button className="text-sm mb-2" onClick={() => setShowOppEquityCurve(!showOppEquityCurve)}>{showOppEquityCurve ? 'Hide Opponent' : 'Show Opponent'}</button>
@@ -452,58 +607,317 @@ function GamePageContent() {
                 <PriceChart data1={myEquityChartData} data2={oppEquityChartData} showData2={showOppEquityCurve}/>
               </div>
             </div>
+
+            {/* Tabs Section: Orders, Positions, History */}
+            <div className="border border-gray-700 bg-gray-800">
+              {/* Tab Bar */}
+              <div className="flex border-b border-gray-700">
+                <button
+                  onClick={() => setActiveTab('orders')}
+                  className={`flex-1 px-4 py-2 text-sm font-medium ${
+                    activeTab === 'orders'
+                      ? 'bg-gray-700 text-white border-b-2 border-blue-500'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-750'
+                  }`}
+                >
+                  Orders
+                </button>
+                <button
+                  onClick={() => setActiveTab('positions')}
+                  className={`flex-1 px-4 py-2 text-sm font-medium ${
+                    activeTab === 'positions'
+                      ? 'bg-gray-700 text-white border-b-2 border-blue-500'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-750'
+                  }`}
+                >
+                  Positions
+                </button>
+                <button
+                  onClick={() => setActiveTab('history')}
+                  className={`flex-1 px-4 py-2 text-sm font-medium ${
+                    activeTab === 'history'
+                      ? 'bg-gray-700 text-white border-b-2 border-blue-500'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-750'
+                  }`}
+                >
+                  History
+                </button>
+              </div>
+
+              {/* Tab Content */}
+              <div className="p-4 max-h-96 overflow-y-auto">
+                {/* Orders Tab */}
+                {activeTab === 'orders' && (
+                  <div>
+                    {orders.length === 0 ? (
+                      <div className="text-sm text-gray-500 text-center py-8">No open orders yet</div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-gray-700">
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Time</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Type</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Ticker</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Direction</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Size</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Original Size</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Order Value</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Price</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Trigger Conditions</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">TP/SL</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Status</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Cancel</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {orders.map((order) => (
+                              <tr key={order.id} className="border-b border-gray-800 hover:bg-gray-800">
+                                <td className="py-2 px-3 text-gray-300">
+                                  {order.created_at ? new Date(order.created_at).toLocaleString() : '-'}
+                                </td>
+                                <td className="py-2 px-3 text-gray-300">{order.order_type}</td>
+                                <td className="py-2 px-3 text-white font-medium">{order.symbol}</td>
+                                <td className={`py-2 px-3 ${order.side === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
+                                  {order.side}
+                                </td>
+                                <td className="py-2 px-3 text-gray-300">{order.quantity}</td>
+                                <td className="py-2 px-3 text-gray-300">{order.quantity}</td>
+                                <td className="py-2 px-3 text-gray-300">
+                                  {order.price ? `${(Number(order.quantity) * Number(order.price)).toFixed(2)}` : 'Market'}
+                                </td>
+                                <td className="py-2 px-3 text-gray-300">
+                                  {order.price ? `$${order.price}` : order.trigger_price ? `$${order.trigger_price}` : 'Market'}
+                                </td>
+                                <td className="py-2 px-3 text-gray-400">
+                                  {order.trigger_price 
+                                    ? `${order.order_type === 'TAKE_PROFIT' ? 'Price above' : 'Price below'} ${order.trigger_price}`
+                                    : 'N/A'}
+                                </td>
+                                <td className="py-2 px-3 text-gray-400">
+                                  {order.position_id ? 'View' : '--'}
+                                </td>
+                                <td className="py-2 px-3">
+                                  <span className="px-2 py-0.5 rounded bg-yellow-900 text-yellow-300 text-xs">
+                                    {order.status.toUpperCase()}
+                                  </span>
+                                </td>
+                                <td className="py-2 px-3">
+                                  <button
+                                    onClick={() => handleCancelOrder(order.id)}
+                                    className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700"
+                                    disabled={loading}
+                                  >
+                                    Cancel
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Positions Tab */}
+                {activeTab === 'positions' && (
+                  <div>
+                    {positions.length === 0 ? (
+                      <div className="text-sm text-gray-500 text-center py-8">No open positions yet</div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-gray-700">
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Ticker</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Size</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Position Value</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Entry Price</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Mark Price</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">PNL (ROE %)</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">TP/SL</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {positions.map((pos) => {
+                              const positionValue = Number(pos.quantity) * Number(pos.current_price || pos.entry_price);
+                              const roePercent = pos.entry_price ? ((Number(pos.unrealized_pnl) / (Number(pos.quantity) * Number(pos.entry_price))) * 100).toFixed(2) : '0.00';
+                              return (
+                                <tr key={pos.id} className="border-b border-gray-800 hover:bg-gray-800">
+                                  <td className="py-2 px-3 text-white font-medium">{pos.symbol}</td>
+                                  <td className="py-2 px-3 text-gray-300">{pos.quantity}</td>
+                                  <td className="py-2 px-3 text-gray-300">${positionValue.toFixed(2)}</td>
+                                  <td className="py-2 px-3 text-gray-300">${pos.entry_price}</td>
+                                  <td className="py-2 px-3 text-gray-300">${pos.current_price || pos.entry_price}</td>
+                                  <td className={`py-2 px-3 ${pos.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                    ${pos.unrealized_pnl?.toFixed(2) || '0.00'} ({roePercent}%)
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    {(() => {
+                                      const tpSlOrders = positionTpSlOrders[pos.id] || [];
+                                      const hasTp = tpSlOrders.some(o => o.order_type === 'TAKE_PROFIT' && (o.status === 'pending' || o.status === 'filled'));
+                                      const hasSl = tpSlOrders.some(o => o.order_type === 'STOP_LOSS' && (o.status === 'pending' || o.status === 'filled'));
+                                      const tpStatus = hasTp ? 'TP' : '-';
+                                      const slStatus = hasSl ? 'SL' : '-';
+                                      return (
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-gray-300 text-xs">{tpStatus}/{slStatus}</span>
+                                          <button
+                                            onClick={() => handleOpenTpSlModal(pos.id)}
+                                            className="px-2 py-1 bg-yellow-600 text-white text-xs rounded hover:bg-yellow-700"
+                                            disabled={loading}
+                                          >
+                                            Edit
+                                          </button>
+                                        </div>
+                                      );
+                                    })()}
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    <div className="flex gap-1">
+                                      <button
+                                        onClick={() => handleOpenCloseModal(pos.id, 'MARKET')}
+                                        className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700"
+                                        disabled={loading}
+                                      >
+                                        Market
+                                      </button>
+                                      <button
+                                        onClick={() => handleOpenCloseModal(pos.id, 'LIMIT')}
+                                        className="px-2 py-1 bg-orange-600 text-white text-xs rounded hover:bg-orange-700"
+                                        disabled={loading}
+                                      >
+                                        Limit
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* History Tab */}
+                {activeTab === 'history' && (
+                  <div>
+                    {allOrders.length === 0 ? (
+                      <div className="text-sm text-gray-500 text-center py-8">No order history</div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-gray-700">
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Time</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Type</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Ticker</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Direction</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Size</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Filled Size</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Order Value</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Price</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Trigger Conditions</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">TP/SL</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Status</th>
+                              <th className="text-left py-2 px-3 text-gray-400 font-medium">Order ID</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {allOrders.map((order) => {
+                              const orderValue = order.filled_price 
+                                ? (Number(order.quantity) * Number(order.filled_price)).toFixed(2)
+                                : order.price 
+                                ? (Number(order.quantity) * Number(order.price)).toFixed(2)
+                                : '-';
+                              return (
+                                <tr key={order.id} className="border-b border-gray-800 hover:bg-gray-800">
+                                  <td className="py-2 px-3 text-gray-300">
+                                    {order.created_at ? new Date(order.created_at).toLocaleString() : '-'}
+                                  </td>
+                                  <td className="py-2 px-3 text-gray-300">{order.order_type}</td>
+                                  <td className="py-2 px-3 text-white font-medium">{order.symbol}</td>
+                                  <td className={`py-2 px-3 ${order.side === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
+                                    {order.side}
+                                  </td>
+                                  <td className="py-2 px-3 text-gray-300">{order.quantity}</td>
+                                  <td className="py-2 px-3 text-gray-300">
+                                    {order.status === 'filled' ? order.quantity : '-'}
+                                  </td>
+                                  <td className="py-2 px-3 text-gray-300">{orderValue}</td>
+                                  <td className="py-2 px-3 text-gray-300">
+                                    {order.filled_price 
+                                      ? `$${order.filled_price}`
+                                      : order.price 
+                                      ? `$${order.price}`
+                                      : order.trigger_price 
+                                      ? `$${order.trigger_price}`
+                                      : 'Market'}
+                                  </td>
+                                  <td className="py-2 px-3 text-gray-400">
+                                    {order.trigger_price 
+                                      ? `${order.order_type === 'TAKE_PROFIT' ? 'Price above' : 'Price below'} ${order.trigger_price}`
+                                      : 'N/A'}
+                                  </td>
+                                  <td className="py-2 px-3 text-gray-400">
+                                    {order.position_id ? 'View' : '--'}
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    <span className={`px-2 py-0.5 rounded text-xs ${
+                                      order.status === 'filled' ? 'bg-green-900 text-green-300' :
+                                      order.status === 'cancelled' ? 'bg-gray-700 text-gray-300' :
+                                      order.status === 'rejected' ? 'bg-red-900 text-red-300' :
+                                      'bg-yellow-900 text-yellow-300'
+                                    }`}>
+                                      {order.status.toUpperCase()}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 px-3 text-gray-400 text-xs">{order.id.substring(0, 8)}...</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="col-span-2">
-            {/* Open Orders Section */}
-            <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
-              <h3 className="font-bold mb-3 text-white">Open Orders</h3>
-              {orders.length === 0 ? (
-                <div className="text-sm text-gray-500">No open orders</div>
-              ) : (
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {orders.map((order) => (
-                    <div key={order.id} className="p-2 bg-gray-900 rounded text-sm">
-                      <div className="flex justify-between items-start text-white">
-                        <div className="flex-1">
-                          <div className="flex gap-2">
-                            <span className="font-bold">{order.symbol}</span>
-                            <span className="text-gray-400">{order.order_type}</span>
-                            <span className={order.side === 'BUY' ? 'text-green-400' : 'text-red-400'}>
-                              {order.side}
-                            </span>
-                          </div>
-                          <div className="text-gray-400 text-xs mt-1">
-                            <div>Qty: {order.quantity}</div>
-                            {order.price && <div>Limit: ${order.price}</div>}
-                            {order.trigger_price && <div>Trigger: ${order.trigger_price}</div>}
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => handleCancelOrder(order.id)}
-                          className="ml-2 px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700"
-                          disabled={loading}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
             {/* Place Order Section */}
             <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
               <h3 className="font-bold mb-3 text-white">Place Order</h3>
-              <select
-                value={orderType}
-                onChange={(e) => setOrderType(e.target.value as 'MARKET' | 'LIMIT')}
-                className="w-full p-2 bg-gray-900 border border-gray-700 text-white mb-2"
-              >
-                <option value="MARKET">Market</option>
-                <option value="LIMIT">Limit</option>
-              </select>
+              
+              {/* Market/Limit Tabs */}
+              <div className="flex border-b border-gray-700 mb-4">
+                <button
+                  onClick={() => setOrderType('MARKET')}
+                  className={`flex-1 px-4 py-2 text-sm font-medium ${
+                    orderType === 'MARKET'
+                      ? 'bg-gray-700 text-white border-b-2 border-blue-500'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-750'
+                  }`}
+                >
+                  Market
+                </button>
+                <button
+                  onClick={() => setOrderType('LIMIT')}
+                  className={`flex-1 px-4 py-2 text-sm font-medium ${
+                    orderType === 'LIMIT'
+                      ? 'bg-gray-700 text-white border-b-2 border-blue-500'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-750'
+                  }`}
+                >
+                  Limit
+                </button>
+              </div>
               
               <select
                 value={symbol}
@@ -564,90 +978,281 @@ function GamePageContent() {
                 {loading ? 'Processing...' : 'Process Orders'}
               </button>
             </div>
+          </div>
+        </div>
+      </div>
 
-            {/* Your Positions Section */}
-            <div className="border border-gray-700 bg-gray-800 p-4">
-              <h3 className="font-bold mb-3 text-white">Your Positions</h3>
-              {positions.length === 0 ? (
-                <div className="text-sm text-gray-500">No open positions</div>
-              ) : (
-                <div className="space-y-2 max-h-96 overflow-y-auto">
-                  {positions.map((pos) => (
-                    <div key={pos.id} className="p-2 bg-gray-900 rounded text-sm">
-                      <div className="flex justify-between text-white">
-                        <span className="font-bold">{pos.symbol}</span>
-                        <span className={pos.side === 'BUY' ? 'text-green-400' : 'text-red-400'}>
-                          {pos.side}
-                        </span>
-                      </div>
-                      <div className="text-gray-400 mb-2">
-                        <div>Qty: {pos.quantity}</div>
-                        <div>Entry: ${pos.entry_price}</div>
-                        <div className={pos.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
-                          P&L: ${pos.unrealized_pnl?.toFixed(2) || '0.00'}
+      {/* TP/SL Modal */}
+      {showTpSlModal && selectedPositionForTpSl && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          onClick={handleCloseTpSlModal}
+        >
+          <div 
+            className="bg-gray-800 border border-gray-700 rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center mb-4">
+              {(() => {
+                const position = positions.find(p => p.id === selectedPositionForTpSl);
+                return <h2 className="text-xl font-bold text-white">Manage TP/SL for {position?.symbol}</h2>;
+              })()}
+              <button
+                onClick={handleCloseTpSlModal}
+                className="text-gray-400 hover:text-white text-2xl"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Existing TP/SL Orders */}
+            <div className="mb-6">
+              <h3 className="text-lg font-semibold text-white mb-3">Existing TP/SL Orders</h3>
+              {selectedPositionForTpSl && positionTpSlOrders[selectedPositionForTpSl] && positionTpSlOrders[selectedPositionForTpSl].length > 0 ? (
+                <div className="space-y-2">
+                  {positionTpSlOrders[selectedPositionForTpSl].map((order) => (
+                    <div key={order.id} className="p-3 bg-gray-900 rounded border border-gray-700">
+                      {editingOrderId === order.id ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-white font-medium">{order.order_type}</span>
+                            <span className={`px-2 py-0.5 rounded text-xs ${
+                              order.status === 'pending' ? 'bg-yellow-900 text-yellow-300' : 'bg-green-900 text-green-300'
+                            }`}>
+                              {order.status.toUpperCase()}
+                            </span>
+                          </div>
+                          <input
+                            type="number"
+                            placeholder="Trigger Price"
+                            value={editTriggerPrice}
+                            onChange={(e) => setEditTriggerPrice(e.target.value)}
+                            className="w-full p-2 bg-gray-800 border border-gray-700 text-white rounded"
+                          />
+                          <input
+                            type="number"
+                            placeholder="Quantity (optional)"
+                            value={editQuantity}
+                            onChange={(e) => setEditQuantity(e.target.value)}
+                            className="w-full p-2 bg-gray-800 border border-gray-700 text-white rounded"
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              onClick={handleSaveTpSlEdit}
+                              className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                              disabled={loading}
+                            >
+                              Save
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditingOrderId(null);
+                                setEditTriggerPrice('');
+                                setEditQuantity('');
+                              }}
+                              className="px-3 py-1 bg-gray-600 text-white text-sm rounded hover:bg-gray-700"
+                            >
+                              Cancel
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        <button
-                          onClick={() => handleEditTpSl(pos.id)}
-                          className="px-2 py-1 bg-yellow-600 text-white text-xs rounded hover:bg-yellow-700"
-                          disabled={loading}
-                        >
-                          Edit TP/SL
-                        </button>
-                        <button
-                          onClick={() => handleClosePosition(pos.id, 'MARKET')}
-                          className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700"
-                          disabled={loading}
-                        >
-                          Market Close
-                        </button>
-                        <button
-                          onClick={() => handleClosePosition(pos.id, 'LIMIT')}
-                          className="px-2 py-1 bg-orange-600 text-white text-xs rounded hover:bg-orange-700"
-                          disabled={loading}
-                        >
-                          Limit Close
-                        </button>
-                      </div>
-                      {editingPositionId === pos.id && positionTpSlOrders[pos.id] && (
-                        <div className="mt-2 p-2 bg-gray-800 rounded border border-gray-700">
-                          <div className="text-xs text-white mb-1">TP/SL Orders:</div>
-                          {positionTpSlOrders[pos.id].length === 0 ? (
-                            <div className="text-xs text-gray-500">No TP/SL orders</div>
-                          ) : (
-                            <div className="space-y-1">
-                              {positionTpSlOrders[pos.id].map((order) => (
-                                <div key={order.id} className="text-xs text-gray-400">
-                                  {order.order_type}: ${order.trigger_price} (Qty: {order.quantity})
-                                  {order.status === 'pending' && (
-                                    <button
-                                      onClick={() => handleUpdateTpSl(order.id, { triggerPrice: parseFloat(prompt('New trigger price:') || '0') || undefined })}
-                                      className="ml-1 text-blue-400 hover:underline"
-                                    >
-                                      Edit
-                                    </button>
-                                  )}
-                                </div>
-                              ))}
+                      ) : (
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-white font-medium">{order.order_type}</span>
+                              <span className={`px-2 py-0.5 rounded text-xs ${
+                                order.status === 'pending' ? 'bg-yellow-900 text-yellow-300' : 'bg-green-900 text-green-300'
+                              }`}>
+                                {order.status.toUpperCase()}
+                              </span>
                             </div>
-                          )}
-                          <button
-                            onClick={() => setEditingPositionId(null)}
-                            className="mt-1 text-xs text-gray-400 hover:text-white"
-                          >
-                            Close
-                          </button>
+                            <div className="text-gray-400 text-sm mt-1">
+                              Trigger: ${order.trigger_price}, Qty: {order.quantity}
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            {order.status === 'pending' && (
+                              <>
+                                <button
+                                  onClick={() => handleEditTpSlOrder(order.id)}
+                                  className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteTpSl(order.id)}
+                                  className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700"
+                                  disabled={loading}
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
                   ))}
                 </div>
+              ) : (
+                <div className="text-sm text-gray-500">No TP/SL orders</div>
               )}
+            </div>
+
+            {/* Create New TP */}
+            <div className="mb-6 p-4 bg-gray-900 rounded border border-gray-700">
+              <h3 className="text-lg font-semibold text-white mb-3">Create Take Profit</h3>
+              <div className="space-y-2">
+                <input
+                  type="number"
+                  placeholder="Trigger Price"
+                  value={newTpTriggerPrice}
+                  onChange={(e) => setNewTpTriggerPrice(e.target.value)}
+                  className="w-full p-2 bg-gray-800 border border-gray-700 text-white rounded"
+                />
+                <input
+                  type="number"
+                  placeholder="Quantity (optional, defaults to full position)"
+                  value={newTpQuantity}
+                  onChange={(e) => setNewTpQuantity(e.target.value)}
+                  className="w-full p-2 bg-gray-800 border border-gray-700 text-white rounded"
+                />
+                <button
+                  onClick={() => handleCreateTpSl('TAKE_PROFIT')}
+                  className="w-full px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                  disabled={loading || !newTpTriggerPrice}
+                >
+                  Create Take Profit
+                </button>
+              </div>
+            </div>
+
+            {/* Create New SL */}
+            <div className="mb-4 p-4 bg-gray-900 rounded border border-gray-700">
+              <h3 className="text-lg font-semibold text-white mb-3">Create Stop Loss</h3>
+              <div className="space-y-2">
+                <input
+                  type="number"
+                  placeholder="Trigger Price"
+                  value={newSlTriggerPrice}
+                  onChange={(e) => setNewSlTriggerPrice(e.target.value)}
+                  className="w-full p-2 bg-gray-800 border border-gray-700 text-white rounded"
+                />
+                <input
+                  type="number"
+                  placeholder="Quantity (optional, defaults to full position)"
+                  value={newSlQuantity}
+                  onChange={(e) => setNewSlQuantity(e.target.value)}
+                  className="w-full p-2 bg-gray-800 border border-gray-700 text-white rounded"
+                />
+                <button
+                  onClick={() => handleCreateTpSl('STOP_LOSS')}
+                  className="w-full px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+                  disabled={loading || !newSlTriggerPrice}
+                >
+                  Create Stop Loss
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={handleCloseTpSlModal}
+                className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* Close Position Modal */}
+      {showCloseModal && selectedPositionForClose && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          onClick={handleCloseModal}
+        >
+          <div 
+            className="bg-gray-800 border border-gray-700 rounded-lg p-6 max-w-md w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center mb-4">
+              {(() => {
+                const position = positions.find(p => p.id === selectedPositionForClose);
+                return <h2 className="text-xl font-bold text-white">{closeOrderType} Close - {position?.symbol}</h2>;
+              })()}
+              <button
+                onClick={handleCloseModal}
+                className="text-gray-400 hover:text-white text-2xl"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {(() => {
+                const position = positions.find(p => p.id === selectedPositionForClose);
+                if (!position) return null;
+                
+                return (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                        Quantity (Max: {position.quantity})
+                      </label>
+                      <input
+                        type="number"
+                        placeholder="Enter quantity"
+                        value={closeQuantity}
+                        onChange={(e) => setCloseQuantity(e.target.value)}
+                        max={position.quantity}
+                        min="0"
+                        step="0.01"
+                        className="w-full p-2 bg-gray-900 border border-gray-700 text-white rounded"
+                      />
+                    </div>
+
+                    {closeOrderType === 'LIMIT' && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                          Limit Price
+                        </label>
+                        <input
+                          type="number"
+                          placeholder="Enter limit price"
+                          value={closeLimitPrice}
+                          onChange={(e) => setCloseLimitPrice(e.target.value)}
+                          min="0"
+                          step="0.01"
+                          className="w-full p-2 bg-gray-900 border border-gray-700 text-white rounded"
+                        />
+                      </div>
+                    )}
+
+                    <div className="flex gap-2 pt-4">
+                      <button
+                        onClick={handleClosePositionSubmit}
+                        className="flex-1 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                        disabled={loading || !closeQuantity || (closeOrderType === 'LIMIT' && !closeLimitPrice)}
+                      >
+                        {loading ? 'Placing...' : 'Place Close Order'}
+                      </button>
+                      <button
+                        onClick={handleCloseModal}
+                        className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

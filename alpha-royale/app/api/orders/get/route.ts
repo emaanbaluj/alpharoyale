@@ -21,8 +21,12 @@ export async function GET(request: Request) {
     .select('*')
     .eq('game_id', gameId)
     .eq('player_id', playerId)
-    .eq('status', status)
     .order('created_at', { ascending: false });
+
+  // If status is 'all', don't filter by status, otherwise filter
+  if (status !== 'all') {
+    query = query.eq('status', status);
+  }
 
   const { data: orders, error } = await query;
 
