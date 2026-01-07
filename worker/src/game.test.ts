@@ -29,15 +29,44 @@ describe('processMarketOrders', () => {
   const tick = 1;
 
   beforeEach(() => {
-    mockSupabase = {} as SupabaseClient;
+    // Mock supabase.from() chain for helper functions (checkBalanceForBuy, checkPositionsForSell)
+    mockSupabase = {} as any;
     vi.clearAllMocks();
   });
+
+  // Helper to setup supabase.from() mocks
+  function setupSupabaseMock(balance?: number, positionQty?: number) {
+    const mockSingle = vi.fn().mockResolvedValue({
+      data: balance !== undefined
+        ? { balance: balance.toString() }
+        : positionQty !== undefined
+        ? { quantity: positionQty.toString(), side: 'BUY', status: 'open' }
+        : null,
+      error: null,
+    });
+    // Chain multiple .eq() calls, then .single()
+    const mockEq = vi.fn().mockReturnValue({ 
+      eq: vi.fn().mockReturnValue({ 
+        eq: vi.fn().mockReturnValue({ 
+          eq: vi.fn().mockReturnValue({ single: mockSingle }),
+          single: mockSingle 
+        }),
+        single: mockSingle 
+      }),
+      single: mockSingle 
+    });
+    const mockSelect = vi.fn().mockReturnValue({ eq: mockEq });
+    (mockSupabase as any).from = vi.fn().mockReturnValue({ select: mockSelect });
+  }
 
   it('should execute pending market buy orders and create position', async () => {
     const playerId = 'player-1';
     const symbol = 'BTC';
     const quantity = 0.1;
     const fillPrice = 50000;
+
+    // Setup supabase mock for checkBalanceForBuy (returns balance 10000)
+    setupSupabaseMock(10000);
 
     // Mock pending market buy order
     vi.mocked(db.fetchOrdersFromDB).mockResolvedValue([
@@ -131,6 +160,21 @@ describe('processMarketOrders', () => {
     const symbol = 'BTC';
     const quantity = 0.1;
     const fillPrice = 50000;
+
+    // Setup supabase mock for checkPositionsForSell (no position, returns error)
+    const mockSingle = vi.fn().mockResolvedValue({ data: null, error: { message: 'not found' } });
+    const mockEq = vi.fn().mockReturnValue({ 
+      eq: vi.fn().mockReturnValue({ 
+        eq: vi.fn().mockReturnValue({ 
+          eq: vi.fn().mockReturnValue({ single: mockSingle }),
+          single: mockSingle 
+        }),
+        single: mockSingle 
+      }),
+      single: mockSingle 
+    });
+    const mockSelect = vi.fn().mockReturnValue({ eq: mockEq });
+    (mockSupabase as any).from = vi.fn().mockReturnValue({ select: mockSelect });
 
     // Mock pending market sell order
     vi.mocked(db.fetchOrdersFromDB).mockResolvedValue([
@@ -239,6 +283,9 @@ describe('processMarketOrders', () => {
     const cost = quantity * fillPrice; // $5,000
     const playerBalance = 4000; // Less than cost
 
+    // Setup supabase mock for checkBalanceForBuy (returns insufficient balance 4000)
+    setupSupabaseMock(4000);
+
     // Mock pending market buy order
     vi.mocked(db.fetchOrdersFromDB).mockResolvedValue([
       {
@@ -301,6 +348,9 @@ describe('processMarketOrders', () => {
     const firstPrice = 50000;
     const secondPrice = 60000;
     const playerBalance = 20000; // Enough for both purchases
+
+    // Setup supabase mock for checkBalanceForBuy (returns balance 20000)
+    setupSupabaseMock(20000);
 
     // Mock existing position
     const existingPosition = {
@@ -399,6 +449,9 @@ describe('processMarketOrders', () => {
     const entryPrice = 50000;
     const sellPrice = 55000;
     const playerBalance = 10000;
+
+    // Setup supabase mock for checkPositionsForSell (returns position with qty 0.2)
+    setupSupabaseMock(undefined, 0.2);
 
     // Mock existing position
     const existingPosition = {
@@ -692,15 +745,6 @@ describe('processConditionalOrders', () => {
     const tpQty = 0.1; // Partial close
     const positionId = 'pos-1';
 
-    // Mock supabase.from() chain for partial close
-    const mockUpdate = vi.fn().mockResolvedValue({ data: null, error: null });
-    const mockEq = vi.fn().mockReturnValue({ data: null, error: null });
-    (mockSupabase as any).from = vi.fn().mockReturnValue({
-      update: vi.fn().mockReturnValue({
-        eq: mockEq,
-      }),
-    });
-
     // Mock TP order with partial quantity
     vi.mocked(db.fetchOrdersFromDB).mockResolvedValue([
       {
@@ -749,6 +793,7 @@ describe('processConditionalOrders', () => {
 
     vi.mocked(db.updateOrderInDB).mockResolvedValue();
     vi.mocked(db.insertOrderExecutionInDB).mockResolvedValue();
+    vi.mocked(db.updatePositionInDB).mockResolvedValue();
     vi.mocked(db.updateGamePlayerBalanceInDB).mockResolvedValue();
 
     await processConditionalOrders(mockSupabase, gameId, tick);
@@ -761,8 +806,16 @@ describe('processConditionalOrders', () => {
       currentPrice
     );
 
-    // Verify supabase.from() was called for partial position update
-    expect((mockSupabase as any).from).toHaveBeenCalledWith("positions");
+    // Verify position was partially reduced (not closed) using updatePositionInDB
+    const remainingQty = positionQty - tpQty; // 0.1
+    expect(db.updatePositionInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      positionId,
+      {
+        quantity: remainingQty,
+        currentPrice: currentPrice,
+      }
+    );
 
     // Verify balance was credited
     const proceeds = currentPrice * tpQty;
@@ -851,8 +904,16 @@ describe('processConditionalOrders', () => {
       currentPrice
     );
 
-    // Verify supabase.from() was called for partial position update
-    expect((mockSupabase as any).from).toHaveBeenCalledWith("positions");
+    // Verify position was partially reduced (not closed) using updatePositionInDB
+    const remainingQty = positionQty - slQty; // 0.1
+    expect(db.updatePositionInDB).toHaveBeenCalledWith(
+      mockSupabase,
+      positionId,
+      {
+        quantity: remainingQty,
+        currentPrice: currentPrice,
+      }
+    );
 
     // Verify balance was credited
     const proceeds = currentPrice * slQty;

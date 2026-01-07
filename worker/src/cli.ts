@@ -237,6 +237,7 @@ async function createOrderInteractive(
         message: "Order type",
         choices: [
           { title: "MARKET", value: "MARKET" },
+          { title: "LIMIT", value: "LIMIT" },
           { title: "TAKE_PROFIT", value: "TAKE_PROFIT" },
           { title: "STOP_LOSS", value: "STOP_LOSS" },
         ],
@@ -257,8 +258,15 @@ async function createOrderInteractive(
         validate: (value) => value > 0 || "Quantity must be greater than 0",
       },
       {
-        type: () => null, // No price field needed (LIMIT orders not implemented)
+        type: (prev, values) => (values.orderType === "LIMIT") ? "number" : null,
         name: "price",
+        message: "Price (for LIMIT orders)",
+        validate: (value, prev, values) => {
+          if (values.orderType === "LIMIT" && (!value || value <= 0)) {
+            return "Price is required for LIMIT orders";
+          }
+          return true;
+        },
       },
       {
         type: (prev, values) => (values.orderType === "TAKE_PROFIT" || values.orderType === "STOP_LOSS") ? "number" : null,
