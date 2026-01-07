@@ -44,21 +44,28 @@ async function scheduledHandler(
       status: string;
     };
     
-    if (!status.alarmScheduled || status.nextAlarm === null) {
-      // No alarm scheduled, start the DO (this will schedule the first alarm)
-      console.log('[Cron] Initializing DO scheduler (no alarm scheduled)');
+    const currentTime = Date.now();
+    const alarmIsInPast = status.nextAlarm !== null && status.nextAlarm < currentTime;
+    
+    if (!status.alarmScheduled || status.nextAlarm === null || alarmIsInPast) {
+      // No alarm scheduled OR alarm is in the past - restart the DO
+      const reason = !status.alarmScheduled || status.nextAlarm === null 
+        ? 'no alarm scheduled' 
+        : 'alarm time is in the past';
+      console.log(`[Cron] Restarting DO scheduler (${reason})`);
+      
       const startResponse = await stub.fetch(new Request('http://internal/?action=start'));
       
       if (startResponse.ok) {
         const result = await startResponse.json();
-        console.log(`[Cron] DO scheduler started: ${JSON.stringify(result)}`);
+        console.log(`[Cron] DO scheduler restarted: ${JSON.stringify(result)}`);
       } else {
-        console.error(`[Cron] Failed to start DO scheduler: ${startResponse.status}`);
+        console.error(`[Cron] Failed to restart DO scheduler: ${startResponse.status}`);
       }
     } else {
-      // Alarm already scheduled, DO is running - just log for monitoring
+      // Alarm already scheduled and in the future - just log for monitoring
       const nextAlarmDate = new Date(status.nextAlarm);
-      const timeUntil = status.nextAlarm - Date.now();
+      const timeUntil = status.nextAlarm - currentTime;
       console.log(`[Cron] DO scheduler is running (next alarm in ${Math.round(timeUntil / 1000)}s at ${nextAlarmDate.toISOString()})`);
     }
   } catch (error) {

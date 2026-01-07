@@ -64,21 +64,25 @@ export class SchedulerDO extends DurableObject<Env> {
       if (action === 'start' || action === 'wakeup') {
         // Check if alarm is already scheduled
         const currentAlarm = await state.storage.getAlarm();
+        const currentTime = Date.now();
+        const alarmIsInPast = currentAlarm !== null && currentAlarm < currentTime;
         
-        if (currentAlarm === null) {
-          // No alarm scheduled, start it now
+        if (currentAlarm === null || alarmIsInPast) {
+          // No alarm scheduled OR alarm is in the past - reschedule it now
           const nextAlarmTime = Date.now() + 10000;
           await state.storage.setAlarm(nextAlarmTime);
-          console.log(`[SchedulerDO] Started via ${action} - alarm scheduled for ${new Date(nextAlarmTime).toISOString()}`);
+          const reason = currentAlarm === null ? 'no alarm scheduled' : 'alarm time was in the past';
+          console.log(`[SchedulerDO] Started/rescheduled via ${action} (${reason}) - alarm scheduled for ${new Date(nextAlarmTime).toISOString()}`);
           return new Response(JSON.stringify({ 
-            status: 'started', 
+            status: alarmIsInPast ? 'rescheduled' : 'started', 
             nextAlarm: nextAlarmTime,
-            message: 'Scheduler started successfully'
+            previousAlarm: currentAlarm,
+            message: alarmIsInPast ? 'Scheduler rescheduled (alarm was in past)' : 'Scheduler started successfully'
           }), {
             headers: { 'Content-Type': 'application/json' }
           });
         } else {
-          // Alarm already scheduled, just return status
+          // Alarm already scheduled and in the future, just return status
           console.log(`[SchedulerDO] Already running - next alarm at ${new Date(currentAlarm).toISOString()}`);
           return new Response(JSON.stringify({ 
             status: 'running', 

@@ -44,7 +44,7 @@ interface ChartUnit {
   value: number;
 }
 
-const COMPATIBLETICKERS = ["ETH", "BTC", "AAPL"] as const;
+const COMPATIBLETICKERS = ["ETH", "BTC", "AAPL", "TSLA", "MSFT", "SPY"] as const;
 type CompatibleTickers = (typeof COMPATIBLETICKERS)[number];
 
 function GamePageContent() {
