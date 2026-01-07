@@ -2,11 +2,22 @@ name = "alpharoyale-worker"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
-# Cron trigger - runs every minute
-[[triggers.crons]]
-cron = "* * * * *"
+# Cron trigger - runs every minute (fallback to ensure DO stays alive)
+[triggers]
+crons = ["* * * * *"]
 
 # Service binding to game-tick worker
 [[services]]
 binding = "GAME_TICK_WORKER"
 service = "alpharoyale-game-tick-worker"
+
+# Durable Object binding for scheduler
+[[durable_objects.bindings]]
+name = "SCHEDULER_DO"
+class_name = "SchedulerDO"
+script_name = "alpharoyale-worker"
+
+# Migration to create the DO class
+[[migrations]]
+tag = "v1"
+new_classes = ["SchedulerDO"]
