@@ -5,10 +5,14 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
 
 export async function POST(request: Request) {
-  const { userId } = await request.json();
+  const { userId, durationMinutes = 60 } = await request.json();
 
   if (!userId) {
     return NextResponse.json({ error: 'User ID required' }, { status: 400 });
+  }
+
+  if (durationMinutes < 1 || durationMinutes > 1440) {
+    return NextResponse.json({ error: 'Duration must be between 1 and 1440 minutes' }, { status: 400 });
   }
 
   const supabase = createClient(supabaseUrl, supabaseKey);
@@ -19,7 +23,7 @@ export async function POST(request: Request) {
       player1_id: userId,
       status: 'waiting',
       initial_balance: 10000.00,
-      duration_minutes: 60
+      duration_minutes: durationMinutes
     })
     .select()
     .single();

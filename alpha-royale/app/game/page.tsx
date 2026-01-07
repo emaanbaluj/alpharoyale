@@ -5,7 +5,7 @@ import Image from 'next/image';
 import toast from 'react-hot-toast';
 import { supabase } from '../auth/supabaseClient/supabaseClient';
 import { orderAPI, positionAPI, gameAPI, priceAPI, equityAPI } from '../lib/api';
-import { subscribeToGamePlayers, subscribeToPositions, subscribeToPrices, subscribeToEquityHistory } from '../lib/subscriptions';
+import { subscribeToGamePlayers, subscribeToPositions, subscribeToPrices, subscribeToEquityHistory, subscribeToGame } from '../lib/subscriptions';
 import { PriceChart } from './charts/PriceChart';
 import { CandlestickChart } from './charts/CandlestickChart';
 
@@ -98,6 +98,11 @@ function GamePageContent() {
   const [editTriggerPrice, setEditTriggerPrice] = useState('');
   const [editQuantity, setEditQuantity] = useState('');
   const selectedPosition = positions.find(p => p.id === selectedPositionId);
+
+  // Game status and waiting room state
+  const [gameStatus, setGameStatus] = useState<string | null>(null);
+  const [gamePlayers, setGamePlayers] = useState<any[]>([]);
+  const [currentGame, setCurrentGame] = useState<any>(null);
 
   // Timer state
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
@@ -207,8 +212,53 @@ function GamePageContent() {
     });
   }, [gameId]);
 
+  // Subscribe to game status changes for waiting room
+  useEffect(() => {
+    if (!gameId) return;
+
+    const unsubGame = subscribeToGame(gameId, (payload) => {
+      console.log('Game status updated:', payload);
+      if (payload.new) {
+        setGameStatus(payload.new.status);
+        // If game becomes active, reload game data
+        if (payload.new.status === 'active' && userId) {
+          setTimeout(() => {
+            loadGameData(gameId, userId);
+          }, 500);
+        } else if (payload.new.status === 'waiting' && userId) {
+          // Reload game data when game updates
+          loadGameData(gameId, userId);
+        }
+      }
+    });
+
+    // Subscribe to game players changes while waiting
+    const unsubPlayers = subscribeToGamePlayers(gameId, (payload) => {
+      console.log('Game players updated in waiting room:', payload);
+      if (userId) {
+        loadGameData(gameId, userId);
+      }
+    });
+
+    // Poll for game status updates while waiting (fallback)
+    const pollInterval = setInterval(() => {
+      if (gameStatus === 'waiting' && userId) {
+        loadGameData(gameId, userId);
+      }
+    }, 2000);
+
+    return () => {
+      unsubGame();
+      unsubPlayers();
+      clearInterval(pollInterval);
+    };
+  }, [gameId, userId, gameStatus]);
+
   useEffect(() => {
     if (!gameId || !userId) return;
+
+    // Only subscribe to game updates if game is active
+    if (gameStatus !== 'active') return;
 
     const unsubPlayers = subscribeToGamePlayers(gameId, (payload) => {
       console.log('Game players updated:', payload);
@@ -262,10 +312,22 @@ function GamePageContent() {
       supabase.removeChannel(ordersChannel);
       clearInterval(pollInterval);
     };
-  }, [gameId, userId, opponentId]);
+  }, [gameId, userId, opponentId, gameStatus]);
 
   async function loadGameData(gId: string, uId: string) {
     const { game, players } = await gameAPI.getGame(gId);
+    
+    // Update game status and store game/players
+    if (game) {
+      setGameStatus(game.status);
+      setCurrentGame(game);
+      setGamePlayers(players || []);
+    }
+    
+    // Only load game data if game is active
+    if (game?.status !== 'active') {
+      return;
+    }
     
     // Set game end time for timer
     if (game && game.started_at && game.duration_minutes) {
@@ -621,6 +683,174 @@ function GamePageContent() {
     setLoading(false);
   }
 
+
+  // Show waiting room if game status is 'waiting' or null (still loading)
+  if (gameStatus === 'waiting' || (gameStatus === null && gameId)) {
+    const isPlayer1 = currentGame && userId === currentGame.player1_id;
+    const isPlayer2 = currentGame && userId === currentGame.player2_id;
+    
+    return (
+      <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
+        <div className="bg-[#13141a] border border-[#1e1f25] rounded-lg p-8 max-w-2xl w-full">
+          <div className="text-center mb-6">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600/20 rounded-full mb-4">
+              <svg className="w-8 h-8 text-blue-400 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-2">Waiting Room</h2>
+            <p className="text-gray-400">
+              {gameStatus === null 
+                ? 'Loading game...' 
+                : gamePlayers.length === 2 
+                  ? isPlayer1
+                    ? 'Both players ready! Click "Start Game" to begin.'
+                    : 'Both players ready! Waiting for game creator to start...'
+                  : isPlayer1
+                    ? 'Waiting for opponent to join...'
+                    : 'Waiting for opponent to join...'}
+            </p>
+          </div>
+
+            <div className="space-y-4 mb-6">
+            <div className="bg-[#0a0b0d] border border-[#1e1f25] rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-medium text-gray-400">Game ID</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-mono text-white bg-[#1e1f25] px-3 py-1 rounded">{gameId}</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(gameId || '');
+                      toast.success('Game ID copied to clipboard!');
+                    }}
+                    className="px-2 py-1 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded text-xs transition-colors"
+                    title="Copy Game ID"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-medium text-gray-400">Status</span>
+                <span className="text-sm font-medium text-yellow-400 bg-yellow-900/20 px-3 py-1 rounded">Waiting</span>
+              </div>
+              {currentGame && currentGame.duration_minutes && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-400">Duration</span>
+                  <span className="text-sm font-medium text-white bg-[#1e1f25] px-3 py-1 rounded">
+                    {currentGame.duration_minutes} {currentGame.duration_minutes === 1 ? 'minute' : 'minutes'}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-[#0a0b0d] border border-[#1e1f25] rounded-lg p-4">
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider mb-3">Players</h3>
+              <div className="space-y-2">
+                        {gamePlayers.map((player: any, index: number) => {
+                  const isCurrentUser = player.user_id === userId;
+                  const isP1 = currentGame && player.user_id === currentGame.player1_id;
+                  return (
+                    <div 
+                      key={player.id || index}
+                      className={`flex items-center justify-between p-3 rounded ${
+                        isCurrentUser ? 'bg-blue-600/10 border border-blue-600/30' : 'bg-[#1e1f25]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${
+                          isCurrentUser ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
+                        }`}>
+                          {isP1 ? '1' : '2'}
+                        </div>
+                        <div>
+                          <div className="text-white font-medium">
+                            {isCurrentUser ? 'You' : (isP1 ? 'Player 1' : 'Player 2')}
+                          </div>
+                          <div className="text-xs text-gray-400 font-mono">
+                            {player.user_id.slice(0, 8)}...
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isP1 && (
+                          <span className="text-xs px-2 py-1 bg-purple-600/20 text-purple-400 rounded" title="Game Creator">Creator</span>
+                        )}
+                        {isCurrentUser && (
+                          <span className="text-xs px-2 py-1 bg-blue-600/20 text-blue-400 rounded">You</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {gamePlayers.length < 2 && (
+                  <div className="flex items-center justify-between p-3 rounded bg-[#1e1f25] opacity-50">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm bg-gray-700 text-gray-500">
+                        2
+                      </div>
+                      <div>
+                        <div className="text-gray-500 font-medium">Waiting for opponent...</div>
+                        <div className="text-xs text-gray-600">Share Game ID to invite</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => router.push('/home')}
+              className="flex-1 px-4 py-2 bg-[#1e1f25] hover:bg-[#25262d] text-white rounded font-medium transition-colors"
+            >
+              Back to Home
+            </button>
+            {gamePlayers.length === 2 && currentGame && isPlayer1 ? (
+              <button
+                onClick={async () => {
+                  if (!gameId || !userId) return;
+                  setLoading(true);
+                  try {
+                    const result = await gameAPI.startGame(gameId, userId);
+                    if (result.game) {
+                      toast.success('Game starting!');
+                      // Reload game data to transition to active game
+                      setTimeout(() => {
+                        loadGameData(gameId, userId);
+                      }, 500);
+                    } else {
+                      toast.error('Failed to start game: ' + result.error);
+                      setLoading(false);
+                    }
+                  } catch (error: any) {
+                    toast.error('Error starting game: ' + error.message);
+                    setLoading(false);
+                  }
+                }}
+                disabled={loading}
+                className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? 'Starting...' : 'Start Game'}
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  if (gameId && userId) {
+                    loadGameData(gameId, userId);
+                  }
+                }}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition-colors"
+              >
+                Refresh
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!marketData) return <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
     <div className="text-gray-400">Loading game...</div>

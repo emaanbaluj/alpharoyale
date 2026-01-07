@@ -13,6 +13,7 @@ export async function POST(request: Request) {
 
   const supabase = createClient(supabaseUrl, supabaseKey);
 
+  // Fetch the game
   const { data: game, error: fetchError } = await supabase
     .from('games')
     .select('*')
@@ -24,15 +25,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Game not found or already started' }, { status: 404 });
   }
 
-  if (game.player1_id === userId) {
-    return NextResponse.json({ error: 'Cannot join your own game' }, { status: 400 });
+  // Check that both players are present
+  if (!game.player1_id || !game.player2_id) {
+    return NextResponse.json({ error: 'Both players must join before starting the game' }, { status: 400 });
   }
 
+  // Only the game creator (player1) can start the game
+  if (game.player1_id !== userId) {
+    return NextResponse.json({ error: 'Only the game creator can start the game' }, { status: 403 });
+  }
 
+  // Start the game
   const { data: updatedGame, error: updateError } = await supabase
     .from('games')
     .update({
-      player2_id: userId
+      status: 'active',
+      started_at: new Date().toISOString()
     })
     .eq('id', gameId)
     .select()
@@ -42,18 +50,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: updateError.message }, { status: 500 });
   }
 
-  const { error: playerError } = await supabase
-    .from('game_players')
-    .insert({
-      game_id: gameId,
-      user_id: userId,
-      balance: game.initial_balance,
-      equity: game.initial_balance
-    });
-
-  if (playerError) {
-    return NextResponse.json({ error: playerError.message }, { status: 500 });
-  }
-
   return NextResponse.json({ game: updatedGame });
 }
+
