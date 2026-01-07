@@ -272,6 +272,15 @@ export default function GamePage() {
           <div className="col-span-2">
             <div className="border border-gray-700 bg-gray-800 p-4 mb-4">
               <h3 className="font-bold mb-3 text-white">Place Order</h3>
+              <select
+                value={orderType}
+                onChange={(e) => setOrderType(e.target.value as any)}
+                className="w-full p-2 bg-gray-900 border border-gray-700 text-white mb-2"
+              >
+                <option value="MARKET">Market</option>
+                <option value="STOP_LOSS">Stop Loss</option>
+                <option value="TAKE_PROFIT">Take Profit</option>
+              </select>
               {orderType === 'MARKET' && (
                 <select
                   value={symbol}
@@ -283,15 +292,6 @@ export default function GamePage() {
                   <option>AAPL</option>
                 </select>
               )}
-              <select
-                value={orderType}
-                onChange={(e) => setOrderType(e.target.value as any)}
-                className="w-full p-2 bg-gray-900 border border-gray-700 text-white mb-2"
-              >
-                <option value="MARKET">Market</option>
-                <option value="STOP_LOSS">Stop Loss</option>
-                <option value="TAKE_PROFIT">Take Profit</option>
-              </select>
               {orderType !== 'MARKET' && (
                 <select
                   value={selectedPositionId ?? ''}
