@@ -700,48 +700,62 @@ function GamePageContent() {
     setClosingPosition(false);
   }
 
-  // Show end game screen if game is completed
-  // Will calculate winner from equity if winnerId is not set
+  // Show loading screen while waiting for winner to be determined
+  if (gameStatus === 'completed' && currentGame && gamePlayers.length === 2 && !currentGame.winner_id && !winnerId) {
+    return (
+      <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
+        <div className="bg-[#13141a] border border-[#1e1f25] rounded-lg p-8 max-w-md w-full text-center">
+          <div className="mb-4">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-600/20 mb-4">
+              <svg className="w-8 h-8 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            </div>
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-2">Game Completed</h2>
+          <p className="text-gray-400">Determining winner and finalizing results...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show end game screen only when winner_id is set
   if (gameStatus === 'completed' && currentGame && gamePlayers.length === 2) {
-    // Ensure we have a valid winnerId from the game
-    let actualWinnerId = winnerId || currentGame.winner_id;
+    const actualWinnerId = winnerId || currentGame.winner_id;
     
-    // Fallback: if no winnerId is set, determine winner by highest equity
-    if (!actualWinnerId && gamePlayers.length === 2) {
-      const player1 = gamePlayers[0];
-      const player2 = gamePlayers[1];
-      const equity1 = Number(player1?.equity || player1?.balance || 0);
-      const equity2 = Number(player2?.equity || player2?.balance || 0);
-      actualWinnerId = equity1 >= equity2 ? player1?.user_id : player2?.user_id;
-      console.log('Fallback winner calculation:', { equity1, equity2, actualWinnerId });
+    // Don't show results until winner_id is confirmed
+    if (!actualWinnerId) {
+      return (
+        <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
+          <div className="bg-[#13141a] border border-[#1e1f25] rounded-lg p-8 max-w-md w-full text-center">
+            <div className="mb-4">
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-600/20 mb-4">
+                <svg className="w-8 h-8 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              </div>
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-2">Game Completed</h2>
+            <p className="text-gray-400">Determining winner and finalizing results...</p>
+          </div>
+        </div>
+      );
     }
     
     const winner = gamePlayers.find((p: any) => p.user_id === actualWinnerId);
     const loser = gamePlayers.find((p: any) => p.user_id !== actualWinnerId);
     const isWinner = userId === actualWinnerId;
     
-    // Debug: log if winner/loser are not found correctly
     if (!winner || !loser) {
-      console.error('Winner/Loser lookup issue:', { 
-        winnerId: actualWinnerId, 
-        userId, 
-        gamePlayers, 
-        winner, 
-        loser,
-        currentGame
-      });
-    }
-    
-    // Additional validation: ensure winner actually has higher equity
-    if (winner && loser) {
-      const winnerEquity = Number(winner.equity || winner.balance || 0);
-      const loserEquity = Number(loser.equity || loser.balance || 0);
-      if (winnerEquity < loserEquity) {
-        console.warn('Winner has lower equity than loser!', { 
-          winner: { id: winner.user_id, equity: winnerEquity },
-          loser: { id: loser.user_id, equity: loserEquity }
-        });
-      }
+      return (
+        <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
+          <div className="bg-[#13141a] border border-[#1e1f25] rounded-lg p-8 max-w-md w-full text-center">
+            <p className="text-red-400">Error loading game results. Please refresh the page.</p>
+          </div>
+        </div>
+      );
     }
     
     return (
