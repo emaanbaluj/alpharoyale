@@ -1165,7 +1165,7 @@ function GamePageContent() {
               <button
                 onClick={async () => {
                   if (!gameId || !userId) return;
-                  setLoading(true);
+                  setStartingGame(true);
                   try {
                     const result = await gameAPI.startGame(gameId, userId);
                     if (result.game) {
@@ -1176,17 +1176,17 @@ function GamePageContent() {
                       }, 500);
                     } else {
                       toast.error('Failed to start game: ' + result.error);
-                      setLoading(false);
+                      setStartingGame(false);
                     }
                   } catch (error: any) {
                     toast.error('Error starting game: ' + error.message);
-                    setLoading(false);
+                    setStartingGame(false);
                   }
                 }}
-                disabled={loading}
+                disabled={startingGame}
                 className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? 'Starting...' : 'Start Game'}
+                {startingGame ? 'Starting...' : 'Start Game'}
               </button>
             ) : (
               <button
