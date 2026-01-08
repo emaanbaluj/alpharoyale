@@ -29,6 +29,11 @@ export const gameAPI = {
   async getGame(gameId: string) {
     const res = await fetch(`/api/games/get?gameId=${gameId}`);
     return res.json();
+  },
+
+  async getOngoingGames(playerID: string) {
+    const res = await fetch(`/api/games/get-ongoing?playerID=${playerID}`);
+    return res.json();
   }
 };
 

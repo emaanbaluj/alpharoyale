@@ -19,6 +19,13 @@ interface LeaderboardItem {
     winRate: number;
 }
 
+interface OngoingGames {
+    id: string;
+    started_at: string;
+    duration_minutes: number;
+    opponent: string;
+}
+
 export default function HomeScreen() {
     const router = useRouter();
 
@@ -30,6 +37,8 @@ export default function HomeScreen() {
     const [loading, setLoading] = useState(false);
     const [gameDuration, setGameDuration] = useState<string>("60");
     const [showCreateGameModal, setShowCreateGameModal] = useState<boolean>(false);
+    const [ongoingGames, setOngoingGames] = useState<OngoingGames[] | null>(null);
+    const [nowMs, setNowMs] = useState(() => Date.now());
 
     async function handleLogout() { 
         await supabase.auth.signOut(); 
@@ -42,15 +51,28 @@ export default function HomeScreen() {
             setUserId(user?.id ?? null);
             if (user?.id) {
                 loadUserStats(user.id);
+                loadOngoingGames(user.id);
             }
         });
         loadLeaderboard();
+    }, []);
+
+    useEffect(() => {
+        const id = setInterval(() => setNowMs(Date.now()), 1000);
+        return () => clearInterval(id);
     }, []);
 
     async function loadUserStats(uid: string) {
         const data = await statsAPI.getUserStats(uid);
         if (data.gamesPlayed !== undefined) {
             setUserStats(data);
+        }
+    }
+
+    async function loadOngoingGames(uid: string) {
+        const data = await gameAPI.getOngoingGames(uid);
+        if (data.transformedOngoingGames !== undefined) {
+            setOngoingGames(data.transformedOngoingGames);
         }
     }
 
@@ -94,6 +116,20 @@ export default function HomeScreen() {
         } else {
             toast.error('Failed to join game: ' + result.error);
         }
+    }
+
+    function getTimeLeft(startedAt: string | null, durationMinutes: number, nowMs: number) {
+        if (!startedAt) return null;
+
+        const endMs = new Date(startedAt).getTime() + durationMinutes * 60_000;
+        const remainingMs = Math.max(0, endMs - nowMs);
+
+        const totalSeconds = Math.floor(remainingMs / 1000);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+
+        return { hours, minutes, seconds, done: remainingMs === 0 };
     }
 
     return(
@@ -182,15 +218,39 @@ export default function HomeScreen() {
 
                     {/* Ongoing Games Card */}
                     <div>
-                       <div className="border border-[#1e1f25] bg-[#13141a] rounded-lg p-5 h-full">
+                        <div className="border border-[#1e1f25] bg-[#13141a] rounded-lg p-5">
                             <h3 className="text-base font-bold text-white uppercase tracking-wider mb-4 border-b border-[#1e1f25] pb-2">Ongoing Games</h3>
-                            <div className="flex items-center justify-center h-32">
-                                <p className="text-sm text-gray-500 italic">
-                                    Coming soon - view your active games here
-                                </p>
+
+                            <div className="flex flex-col gap-3">
+                                {(!ongoingGames || ongoingGames.length === 0) ? (
+                                    <div className="text-sm text-gray-400 py-6 text-center italic">No ongoing games</div>
+                                ) : (
+                                    ongoingGames.map((g, indx) => {
+                                        const t = getTimeLeft(g.started_at, g.duration_minutes, nowMs);
+
+                                        return (
+                                            <div key={g.id ?? indx} className="bg-[#21232d] border border-[#2a2c36] rounded-lg p-4 hover:border-[#3a3d4a] transition">
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <button className="px-3 py-1.5 text-sm font-medium text-white bg-green-600 rounded hover:bg-green-700 transition" onClick={() => router.push(`/game?id=${g.id}`)}>
+                                                        Join Game
+                                                    </button>
+                                                    <div className="text-sm text-gray-300 bg-[#13141a] border border-[#2a2c36] rounded px-2 py-1 whitespace-nowrap tabular-nums">
+                                                        {!t ? '—' : t.done ? 'Ended' : `${t.hours}h ${String(t.minutes).padStart(2,'0')}m ${String(t.seconds).padStart(2,'0')}s`}
+                                                    </div>
+                                                </div>
+
+                                                <div className="mt-3">
+                                                    <div className="text-xs text-gray-400 uppercase tracking-wider">Opponent</div>
+                                                    <div className="text-sm text-white font-mono truncate">{g.opponent ?? 'TBD'}</div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                                )}
                             </div>
-                        </div>  
+                        </div>
                     </div>
+
 
                     {/* Global Leaderboard Card */}
                     <div className="border border-[#1e1f25] bg-[#13141a] rounded-lg p-5">
