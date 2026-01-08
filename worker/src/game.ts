@@ -1020,13 +1020,26 @@ export async function closeAllOpenPositions(
     const qty = Number(pos.quantity);
     const entry = Number(pos.entry_price);
 
-    const closePxRaw = priceBySymbol.get(pos.symbol) 
-    const closePx = Number(closePxRaw);
-
+    // Try to get price from database, fallback to position's current_price or entry_price
+    let closePx = priceBySymbol.get(pos.symbol);
+    if (closePx == null || !Number.isFinite(closePx) || closePx <= 0) {
+      // Fallback to position's current_price if available
+      closePx = Number(pos.current_price);
+      if (!Number.isFinite(closePx) || closePx <= 0) {
+        // Last resort: use entry_price
+        closePx = entry;
+        console.warn(`[closeAllOpenPositions] No price found for ${pos.symbol}, using entry_price: ${closePx}`);
+      } else {
+        console.warn(`[closeAllOpenPositions] No DB price for ${pos.symbol}, using current_price: ${closePx}`);
+      }
+    }
 
     if (!Number.isFinite(qty) || qty <= 0) continue;
     if (!Number.isFinite(entry) || entry <= 0) continue;
-    if (!Number.isFinite(closePx) || closePx <= 0) continue;
+    if (!Number.isFinite(closePx) || closePx <= 0) {
+      console.error(`[closeAllOpenPositions] Cannot close position ${pos.id} for ${pos.symbol}: invalid price ${closePx}`);
+      continue;
+    }
 
     // Realized P&L (no leverage)
     const pnl =

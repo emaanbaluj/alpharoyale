@@ -57,7 +57,8 @@ function GamePageContent() {
   const [orderSide, setOrderSide] = useState('buy');
   const [userId, setUserId] = useState<string | null>(null);
   const [myBalance, setMyBalance] = useState(10000);
-  const [opponentBalance, setOpponentBalance] = useState(10000);
+  const [myEquity, setMyEquity] = useState(10000);
+  const [opponentEquity, setOpponentEquity] = useState(10000);
   const [positions, setPositions] = useState<Position[]>([]);
   const [placingOrder, setPlacingOrder] = useState(false);
   const [closingPosition, setClosingPosition] = useState(false);
@@ -355,9 +356,12 @@ function GamePageContent() {
       if (players) {
         const me = players.find((p: any) => p.user_id === uId);
         const opponent = players.find((p: any) => p.user_id !== uId);
-        if (me) setMyBalance(Number(me.equity || me.balance || 0));
+        if (me) {
+          setMyBalance(Number(me.balance || 0));
+          setMyEquity(Number(me.equity || me.balance || 0));
+        }
         if (opponent) {
-          setOpponentBalance(Number(opponent.equity || opponent.balance || 0));
+          setOpponentEquity(Number(opponent.equity || opponent.balance || 0));
           setOpponentId(opponent.user_id);
         }
       }
@@ -1039,8 +1043,12 @@ function GamePageContent() {
               <span className="text-white font-mono font-semibold">${myBalance.toFixed(2)}</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-gray-500">Opponent:</span>
-              <span className="text-gray-300 font-mono">${opponentBalance.toFixed(2)}</span>
+              <span className="text-gray-500">Equity:</span>
+              <span className="text-white font-mono font-semibold">${myEquity.toFixed(2)}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500">Opponent Equity:</span>
+              <span className="text-gray-300 font-mono">${opponentEquity.toFixed(2)}</span>
             </div>
           </div>
         </div>
