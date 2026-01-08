@@ -221,16 +221,32 @@ function GamePageContent() {
     if (!gameId) return;
 
     const unsubGame = subscribeToGame(gameId, (payload) => {
-      console.log('Game status updated:', payload);
+      console.log('Game updated:', payload);
       if (payload.new) {
-        setGameStatus(payload.new.status);
-        // If game becomes active, reload game data
-        if (payload.new.status === 'active' && userId) {
-          setTimeout(() => {
+        const newStatus = payload.new.status;
+        const newWinnerId = payload.new.winner_id;
+        const oldStatus = payload.old?.status;
+        const oldWinnerId = payload.old?.winner_id;
+        
+        setGameStatus(newStatus);
+        
+        // Reload game data when status changes
+        if (newStatus !== oldStatus && userId) {
+          if (newStatus === 'active') {
+            setTimeout(() => {
+              loadGameData(gameId, userId);
+            }, 500);
+          } else if (newStatus === 'completed') {
+            // Game just completed - reload to get initial data
             loadGameData(gameId, userId);
-          }, 500);
-        } else if (payload.new.status === 'waiting' && userId) {
-          // Reload game data when game updates
+          } else if (newStatus === 'waiting') {
+            loadGameData(gameId, userId);
+          }
+        }
+        
+        // If winner_id was just set (UPDATE event), reload immediately
+        if (newWinnerId && newWinnerId !== oldWinnerId && userId) {
+          console.log('Winner determined! Reloading game data...');
           loadGameData(gameId, userId);
         }
       }
@@ -261,60 +277,67 @@ function GamePageContent() {
   useEffect(() => {
     if (!gameId || !userId) return;
 
-    // Only subscribe to game updates if game is active
-    if (gameStatus !== 'active') return;
-
+    // Subscribe to game player updates for both active and completed games
+    // (completed games need updates when positions close and equity is updated)
     const unsubPlayers = subscribeToGamePlayers(gameId, (payload) => {
       console.log('Game players updated:', payload);
       loadGameData(gameId, userId);
     });
 
-    const unsubPositions = subscribeToPositions(gameId, userId, (payload) => {
-      console.log('Positions updated:', payload);
-      loadPositions(gameId, userId);
-    });
+    // Only subscribe to positions/orders/equity for active games
+    let unsubPositions: (() => void) | null = null;
+    let unsubEquity: (() => void) | null = null;
+    let ordersChannel: any = null;
+    let pollInterval: NodeJS.Timeout | null = null;
 
-    const unsubEquity = subscribeToEquityHistory(gameId, (payload) => {
-      console.log('Equity history updated:', payload);
-      loadEquityHistory(gameId, userId);
-      if (opponentId) {
-        loadEquityHistory(gameId, opponentId, true);
-      }
-    });
+    if (gameStatus === 'active') {
+      unsubPositions = subscribeToPositions(gameId, userId, (payload) => {
+        console.log('Positions updated:', payload);
+        loadPositions(gameId, userId);
+      });
 
-    // Subscribe to orders changes
-    const ordersChannel = supabase
-      .channel(`orders:${gameId}:${userId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'orders',
-          filter: `game_id=eq.${gameId} AND player_id=eq.${userId}`,
-        },
-        () => {
-          loadOrders(gameId, userId);
-          loadAllOrders(gameId, userId);
+      unsubEquity = subscribeToEquityHistory(gameId, (payload) => {
+        console.log('Equity history updated:', payload);
+        loadEquityHistory(gameId, userId);
+        if (opponentId) {
+          loadEquityHistory(gameId, opponentId, true);
         }
-      )
-      .subscribe();
+      });
 
-    // Add polling fallback to ensure UI stays updated (every 3 seconds)
-    const pollInterval = setInterval(() => {
-      loadGameData(gameId, userId);
-      loadPositions(gameId, userId);
-      loadOrders(gameId, userId);
-      loadAllOrders(gameId, userId);
-      loadLatestPrices();
-    }, 3000);
+      // Subscribe to orders changes
+      ordersChannel = supabase
+        .channel(`orders:${gameId}:${userId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'orders',
+            filter: `game_id=eq.${gameId} AND player_id=eq.${userId}`,
+          },
+          () => {
+            loadOrders(gameId, userId);
+            loadAllOrders(gameId, userId);
+          }
+        )
+        .subscribe();
+
+      // Add polling fallback to ensure UI stays updated (every 3 seconds)
+      pollInterval = setInterval(() => {
+        loadGameData(gameId, userId);
+        loadPositions(gameId, userId);
+        loadOrders(gameId, userId);
+        loadAllOrders(gameId, userId);
+        loadLatestPrices();
+      }, 3000);
+    }
 
     return () => {
       unsubPlayers();
-      unsubPositions();
-      unsubEquity();
-      supabase.removeChannel(ordersChannel);
-      clearInterval(pollInterval);
+      if (unsubPositions) unsubPositions();
+      if (unsubEquity) unsubEquity();
+      if (ordersChannel) supabase.removeChannel(ordersChannel);
+      if (pollInterval) clearInterval(pollInterval);
     };
   }, [gameId, userId, opponentId, gameStatus]);
 
@@ -327,6 +350,17 @@ function GamePageContent() {
       setCurrentGame(game);
       setGamePlayers(players || []);
       setWinnerId(game.winner_id || null);
+      
+      // Update balance/equity from players (for both active and completed games)
+      if (players) {
+        const me = players.find((p: any) => p.user_id === uId);
+        const opponent = players.find((p: any) => p.user_id !== uId);
+        if (me) setMyBalance(Number(me.equity || me.balance || 0));
+        if (opponent) {
+          setOpponentBalance(Number(opponent.equity || opponent.balance || 0));
+          setOpponentId(opponent.user_id);
+        }
+      }
     }
     
     // Only load additional game data if game is active
@@ -348,16 +382,6 @@ function GamePageContent() {
       setGameEndTime(endTime);
     } else {
       console.log('Missing game timer data:', { game, started_at: game?.started_at, duration_minutes: game?.duration_minutes });
-    }
-    
-    if (players) {
-      const me = players.find((p: any) => p.user_id === uId);
-      const opponent = players.find((p: any) => p.user_id !== uId);
-      if (me) setMyBalance(me.equity);
-      if (opponent) {
-        setOpponentBalance(opponent.equity);
-        setOpponentId(opponent.user_id);
-      }
     }
     loadPositions(gId, uId);
     loadOrders(gId, uId);
@@ -673,10 +697,48 @@ function GamePageContent() {
   }
 
   // Show end game screen if game is completed
+  // Will calculate winner from equity if winnerId is not set
   if (gameStatus === 'completed' && currentGame && gamePlayers.length === 2) {
-    const winner = gamePlayers.find((p: any) => p.user_id === winnerId);
-    const loser = gamePlayers.find((p: any) => p.user_id !== winnerId);
-    const isWinner = userId === winnerId;
+    // Ensure we have a valid winnerId from the game
+    let actualWinnerId = winnerId || currentGame.winner_id;
+    
+    // Fallback: if no winnerId is set, determine winner by highest equity
+    if (!actualWinnerId && gamePlayers.length === 2) {
+      const player1 = gamePlayers[0];
+      const player2 = gamePlayers[1];
+      const equity1 = Number(player1?.equity || player1?.balance || 0);
+      const equity2 = Number(player2?.equity || player2?.balance || 0);
+      actualWinnerId = equity1 >= equity2 ? player1?.user_id : player2?.user_id;
+      console.log('Fallback winner calculation:', { equity1, equity2, actualWinnerId });
+    }
+    
+    const winner = gamePlayers.find((p: any) => p.user_id === actualWinnerId);
+    const loser = gamePlayers.find((p: any) => p.user_id !== actualWinnerId);
+    const isWinner = userId === actualWinnerId;
+    
+    // Debug: log if winner/loser are not found correctly
+    if (!winner || !loser) {
+      console.error('Winner/Loser lookup issue:', { 
+        winnerId: actualWinnerId, 
+        userId, 
+        gamePlayers, 
+        winner, 
+        loser,
+        currentGame
+      });
+    }
+    
+    // Additional validation: ensure winner actually has higher equity
+    if (winner && loser) {
+      const winnerEquity = Number(winner.equity || winner.balance || 0);
+      const loserEquity = Number(loser.equity || loser.balance || 0);
+      if (winnerEquity < loserEquity) {
+        console.warn('Winner has lower equity than loser!', { 
+          winner: { id: winner.user_id, equity: winnerEquity },
+          loser: { id: loser.user_id, equity: loserEquity }
+        });
+      }
+    }
     
     return (
       <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
@@ -956,6 +1018,7 @@ function GamePageContent() {
       </div>
     );
   }
+
 
   if (!marketData) return <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
     <div className="text-gray-400">Loading game...</div>
