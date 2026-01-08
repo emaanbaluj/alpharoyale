@@ -1,0 +1,6 @@
+name = "alpharoyale-game-tick-worker"
+main = "src/game-tick-worker.ts"
+compatibility_date = "2024-12-01"
+
+# No routes - this worker is only accessible via service binding
+# No cron triggers - this worker is triggered by the main worker
