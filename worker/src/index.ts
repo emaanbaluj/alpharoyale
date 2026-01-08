@@ -1,7 +1,9 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { ScheduledController } from "@cloudflare/workers-types";
-import { fetchPriceDataFromFinnhub } from "./finnhub";
-import * as db from "./db";
+import type { ScheduledController, DurableObjectNamespace } from "@cloudflare/workers-types";
+import type { Env as TickHandlerEnv } from "./tick-handler";
+import { SchedulerDO } from "./scheduler-do";
+
+// Export the DO class so wrangler can find it
+export { SchedulerDO } from "./scheduler-do";
 
 // Fetcher type for service bindings
 interface Fetcher {
@@ -9,123 +11,66 @@ interface Fetcher {
 }
 
 // Environment interface for main worker
-export interface Env {
-  // Supabase
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_ROLE_KEY: string;
-  
-  // Finnhub API
-  FINNHUB_API_KEY: string;
-  
-  // Service binding to game-tick worker
-  GAME_TICK_WORKER: Fetcher;
+export interface Env extends TickHandlerEnv {
+  // Durable Object binding for scheduler
+  SCHEDULER_DO: DurableObjectNamespace<SchedulerDO>;
 }
 
-// Helper to create Supabase client
-function createSupabaseClient(env: Env): SupabaseClient {
-  return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
-}
-
-// Scheduled handler implementation
+/**
+ * Cron fallback handler - ensures the DO scheduler is running
+ * Called every minute to check and initialize the DO if needed
+ */
 async function scheduledHandler(
   controller: ScheduledController,
   env: Env,
   ctx: ExecutionContext
 ): Promise<void> {
   try {
-    const supabase = createSupabaseClient(env);
+    // Get or create the singleton DO instance using a fixed name
+    const id = env.SCHEDULER_DO.idFromName('scheduler');
+    const stub = env.SCHEDULER_DO.get(id);
     
-    // 1. Fetch price data from Finnhub API
-    // Use Binance crypto symbols (format: EXCHANGE:SYMBOL)
-    // Map: normalized symbol (for DB) -> Finnhub symbol (for API)
-    const symbolMap: Record<string, string> = {
-      'BTC': 'BINANCE:BTCUSDT',
-      'ETH': 'BINANCE:ETHUSDT',
-    };
-    const normalizedSymbols = Object.keys(symbolMap);
-    const finnhubSymbols = normalizedSymbols.map(s => symbolMap[s]);
+    // Check if DO has an alarm scheduled
+    const statusResponse = await stub.fetch(new Request('http://internal/?action=status'));
     
-    console.log(`Fetching price data for symbols: ${normalizedSymbols.join(', ')} (via ${finnhubSymbols.join(', ')})`);
-    
-    const priceData = await fetchPriceDataFromFinnhub(finnhubSymbols, env.FINNHUB_API_KEY);
-    
-    // 2. Get current game state (before incrementing)
-    const currentGameStateRow = await db.fetchGameStateFromDB(supabase);
-    const currentGameState = currentGameStateRow?.current_tick ?? 0;
-    const nextGameState = currentGameState + 1;
-    
-    // 3. Store price data in database with new game state
-    // Normalize symbols back to simple format (BTC, ETH) for storage
-    // Create reverse map: finnhub symbol -> normalized symbol
-    const reverseMap: Record<string, string> = {};
-    for (const [normalized, finnhub] of Object.entries(symbolMap)) {
-      reverseMap[finnhub] = normalized;
-    }
-    
-    console.log(`Storing price data for game state: ${nextGameState}`);
-    await Promise.all(
-      priceData.map(({ symbol: finnhubSymbol, price }) => {
-        // Map Finnhub symbol back to normalized symbol (BTC, ETH)
-        const normalizedSymbol = reverseMap[finnhubSymbol] || finnhubSymbol;
-        return db.insertPrice(supabase, normalizedSymbol, price, nextGameState);
-      })
-    );
-    
-    // 4. Increment game state counter
-    console.log(`Incrementing game state from ${currentGameState} to ${nextGameState}`);
-    await db.updateGameStateInDB(supabase, nextGameState);
-    
-    // 5. Fetch active games (only games that have started - started_at IS NOT NULL)
-    // Note: Expiration checking is now done in the bound worker for each game
-    const allActiveGames = await db.fetchGamesFromDB(supabase, 'active');
-    // Filter to only games that have actually started (exclude waiting games)
-    const activeGames = allActiveGames.filter(game => game.started_at !== null);
-    console.log(`Found ${activeGames.length} active games (${allActiveGames.length - activeGames.length} waiting)`);
-    
-    if (activeGames.length === 0) {
-      console.log('No active games to process');
+    if (!statusResponse.ok) {
+      console.error(`[Cron] Failed to check DO status: ${statusResponse.status}`);
       return;
     }
     
-    // 7. Fire off game processing requests without waiting
-    // Each game worker will fetch its own price data from the DB
-    // Use ctx.waitUntil() to keep them running in background
-    // This allows the main worker to complete quickly while games process asynchronously
-    for (const game of activeGames) {
-      ctx.waitUntil(
-        (async () => {
-          try {
-            const response = await env.GAME_TICK_WORKER.fetch(
-              new Request('http://internal/game-tick', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  gameId: game.id,
-                  gameState: nextGameState,
-                }),
-              })
-            );
-            
-            if (!response.ok) {
-              const errorText = await response.text();
-              console.error(`Game ${game.id} failed: ${response.status} - ${errorText}`);
-            } else {
-              console.log(`Game ${game.id} processing initiated for game state ${nextGameState}`);
-            }
-          } catch (error) {
-            console.error(`Error initiating game processing for ${game.id}:`, error);
-          }
-        })()
-      );
-    }
+    const status = await statusResponse.json() as { 
+      alarmScheduled: boolean; 
+      nextAlarm: number | null;
+      status: string;
+    };
     
-    console.log(`Initiated processing for ${activeGames.length} games (running asynchronously)`);
-    console.log(`Game tick completed for game state ${nextGameState} at ${new Date(controller.scheduledTime).toISOString()}`);
+    const currentTime = Date.now();
+    const alarmIsInPast = status.nextAlarm !== null && status.nextAlarm < currentTime;
+    
+    if (!status.alarmScheduled || status.nextAlarm === null || alarmIsInPast) {
+      // No alarm scheduled OR alarm is in the past - restart the DO
+      const reason = !status.alarmScheduled || status.nextAlarm === null 
+        ? 'no alarm scheduled' 
+        : 'alarm time is in the past';
+      console.log(`[Cron] Restarting DO scheduler (${reason})`);
+      
+      const startResponse = await stub.fetch(new Request('http://internal/?action=start'));
+      
+      if (startResponse.ok) {
+        const result = await startResponse.json();
+        console.log(`[Cron] DO scheduler restarted: ${JSON.stringify(result)}`);
+      } else {
+        console.error(`[Cron] Failed to restart DO scheduler: ${startResponse.status}`);
+      }
+    } else {
+      // Alarm already scheduled and in the future - just log for monitoring
+      const nextAlarmDate = new Date(status.nextAlarm);
+      const timeUntil = status.nextAlarm - currentTime;
+      console.log(`[Cron] DO scheduler is running (next alarm in ${Math.round(timeUntil / 1000)}s at ${nextAlarmDate.toISOString()})`);
+    }
   } catch (error) {
-    console.error('Error in scheduled handler:', error);
-    throw error;
+    console.error('[Cron] Error in scheduled handler:', error);
+    // Don't throw - cron should continue even if DO check fails
   }
 }
 
@@ -137,7 +82,7 @@ const handler = {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // Health endpoint
+    // Health endpoint (only public route)
     if (path === '/health' || path === '/') {
       return new Response(
         JSON.stringify({ status: 'ok' }),

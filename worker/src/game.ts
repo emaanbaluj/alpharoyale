@@ -978,6 +978,137 @@ export async function updateEquityHistory(
   }
 }
 
+/**
+ * Close all open positions for a game at the end of the trading day (end of game).
+ * - Rejects all pending orders
+ * - Fetches latest prices for all symbols
+ * - Closes each position at market price and realizes P&L
+ * - Credits proceeds back to player balances
+ * - Updates final equity (which equals balance after all positions closed)
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID to close positions for
+ * @param tick - Current tick number when the game ends
+ */
+
+export async function closeAllOpenPositions(
+  supabase: SupabaseClient,
+  gameId: string,
+  tick: number
+): Promise<void> {
+  // Fetch all open positions
+  const openPositions = await db.fetchPositionsFromDB(supabase, gameId, "open");
+  if (openPositions.length === 0) return;
+
+  // Reject any remaining pending orders (recommended at game end)
+  const pendingOrders = await db.fetchOrdersFromDB(supabase, gameId, "pending");
+  await Promise.all(pendingOrders.map((o) => db.updateOrderInDB(supabase, o.id, "rejected")));
+
+  // 3) Latest prices for all symbols 
+  const symbols = Array.from(new Set(openPositions.map((p: any) => p.symbol)));
+  const priceBySymbol = await getLatestPricesBySymbol(supabase, symbols);
+
+  // Load players' current balances (cash)
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
+  const newBalanceByPlayer = new Map<string, number>(
+    players.map((p: any) => [p.user_id, Number(p.balance ?? 0)])
+  );
+
+  // Close each position and credit proceeds
+  for (const pos of openPositions as any[]) {
+    const playerId = pos.player_id;
+    const qty = Number(pos.quantity);
+    const entry = Number(pos.entry_price);
+
+    // Try to get price from database, fallback to position's current_price or entry_price
+    let closePx = priceBySymbol.get(pos.symbol);
+    if (closePx == null || !Number.isFinite(closePx) || closePx <= 0) {
+      // Fallback to position's current_price if available
+      closePx = Number(pos.current_price);
+      if (!Number.isFinite(closePx) || closePx <= 0) {
+        // Last resort: use entry_price
+        closePx = entry;
+        console.warn(`[closeAllOpenPositions] No price found for ${pos.symbol}, using entry_price: ${closePx}`);
+      } else {
+        console.warn(`[closeAllOpenPositions] No DB price for ${pos.symbol}, using current_price: ${closePx}`);
+      }
+    }
+
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    if (!Number.isFinite(entry) || entry <= 0) continue;
+    if (!Number.isFinite(closePx) || closePx <= 0) {
+      console.error(`[closeAllOpenPositions] Cannot close position ${pos.id} for ${pos.symbol}: invalid price ${closePx}`);
+      continue;
+    }
+
+    // Realized P&L (no leverage)
+    const pnl =
+      pos.side === "BUY"
+        ? (closePx - entry) * qty
+        : pos.side === "SELL"
+        ? (entry - closePx) * qty
+        : 0;
+
+    // Mark position closed
+    await db.updatePositionInDB(supabase, pos.id, {
+      status: "closed",
+      currentPrice: closePx,
+      unrealizedPnl: pnl, 
+    });
+
+    // Update player's CASH balance 
+    const prevBal = newBalanceByPlayer.get(playerId) ?? 0;
+
+    if (pos.side === "BUY") {
+      newBalanceByPlayer.set(playerId, prevBal + closePx * qty);
+    } else {
+      
+      newBalanceByPlayer.set(playerId, prevBal);
+    }
+  }
+
+  // After closing all positions, equity == balance (no open positions left)
+  await Promise.all(
+    Array.from(newBalanceByPlayer.entries()).map(([playerId, bal]) =>
+      db.updateGamePlayerBalanceInDB(supabase, gameId, playerId, bal, bal)
+    )
+  );
+}
+
+/**
+ * Determine and set the winner of a completed game.
+ * - Fetches all players for the game
+ * - Finds the player with the highest equity
+ * - Updates the game status to "completed" with the winner_id
+ *
+ * @param supabase - Supabase client instance
+ * @param gameId - Game ID to determine winner for
+ */
+export async function checkAndSetGameWinner(supabase: SupabaseClient, gameId: string): Promise<void> {
+  const players = await db.fetchGamePlayersFromDB(supabase, gameId);
+
+  if (players.length === 0) {
+    return;
+  }
+
+  // Find the player with the highest equity
+  let winner = players[0];
+  let maxEquity = Number(winner.equity ?? 0);
+
+  for (const player of players) {
+    const equity = Number(player.equity ?? 0);
+    if (equity > maxEquity) {
+      maxEquity = equity;
+      winner = player;
+    }
+  }
+
+  // Update the game with the winner
+  await db.updateGameStatusInDB(supabase, gameId, "completed", winner.user_id);
+}
+
+
+ 
 // --------------------
 // Orchestrator
 // --------------------

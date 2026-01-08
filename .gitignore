@@ -17,3 +17,6 @@
 .idea/
 FRONTEND_INTEGRATION.md
 LOCAL_DEV_SETUP.md
+
+# Wrangler generated types
+worker/worker-configuration.d.ts

@@ -44,7 +44,7 @@ interface ChartUnit {
   value: number;
 }
 
-const COMPATIBLETICKERS = ["ETH", "BTC", "AAPL"] as const;
+const COMPATIBLETICKERS = ["ETH", "BTC", "AAPL", "TSLA", "MSFT", "SPY"] as const;
 type CompatibleTickers = (typeof COMPATIBLETICKERS)[number];
 
 function GamePageContent() {
@@ -57,9 +57,13 @@ function GamePageContent() {
   const [orderSide, setOrderSide] = useState('buy');
   const [userId, setUserId] = useState<string | null>(null);
   const [myBalance, setMyBalance] = useState(10000);
-  const [opponentBalance, setOpponentBalance] = useState(10000);
+  const [myEquity, setMyEquity] = useState(10000);
+  const [opponentEquity, setOpponentEquity] = useState(10000);
   const [positions, setPositions] = useState<Position[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [placingOrder, setPlacingOrder] = useState(false);
+  const [closingPosition, setClosingPosition] = useState(false);
+  const [updatingTpSl, setUpdatingTpSl] = useState(false);
+  const [startingGame, setStartingGame] = useState(false);
   const [selectedChartTicker, setSelectedChartTicker] = useState<CompatibleTickers>("BTC");
   const [marketData, setMarketData] = useState<Partial<Record<CompatibleTickers, TickerPriceData>>>({});
   const [myEquityChartData, setMyEquityChartData] = useState<ChartUnit[]>([]);
@@ -103,6 +107,7 @@ function GamePageContent() {
   const [gameStatus, setGameStatus] = useState<string | null>(null);
   const [gamePlayers, setGamePlayers] = useState<any[]>([]);
   const [currentGame, setCurrentGame] = useState<any>(null);
+  const [winnerId, setWinnerId] = useState<string | null>(null);
 
   // Timer state
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
@@ -217,16 +222,32 @@ function GamePageContent() {
     if (!gameId) return;
 
     const unsubGame = subscribeToGame(gameId, (payload) => {
-      console.log('Game status updated:', payload);
+      console.log('Game updated:', payload);
       if (payload.new) {
-        setGameStatus(payload.new.status);
-        // If game becomes active, reload game data
-        if (payload.new.status === 'active' && userId) {
-          setTimeout(() => {
+        const newStatus = payload.new.status;
+        const newWinnerId = payload.new.winner_id;
+        const oldStatus = payload.old?.status;
+        const oldWinnerId = payload.old?.winner_id;
+        
+        setGameStatus(newStatus);
+        
+        // Reload game data when status changes
+        if (newStatus !== oldStatus && userId) {
+          if (newStatus === 'active') {
+            setTimeout(() => {
+              loadGameData(gameId, userId);
+            }, 500);
+          } else if (newStatus === 'completed') {
+            // Game just completed - reload to get initial data
             loadGameData(gameId, userId);
-          }, 500);
-        } else if (payload.new.status === 'waiting' && userId) {
-          // Reload game data when game updates
+          } else if (newStatus === 'waiting') {
+            loadGameData(gameId, userId);
+          }
+        }
+        
+        // If winner_id was just set (UPDATE event), reload immediately
+        if (newWinnerId && newWinnerId !== oldWinnerId && userId) {
+          console.log('Winner determined! Reloading game data...');
           loadGameData(gameId, userId);
         }
       }
@@ -257,60 +278,67 @@ function GamePageContent() {
   useEffect(() => {
     if (!gameId || !userId) return;
 
-    // Only subscribe to game updates if game is active
-    if (gameStatus !== 'active') return;
-
+    // Subscribe to game player updates for both active and completed games
+    // (completed games need updates when positions close and equity is updated)
     const unsubPlayers = subscribeToGamePlayers(gameId, (payload) => {
       console.log('Game players updated:', payload);
       loadGameData(gameId, userId);
     });
 
-    const unsubPositions = subscribeToPositions(gameId, userId, (payload) => {
-      console.log('Positions updated:', payload);
-      loadPositions(gameId, userId);
-    });
+    // Only subscribe to positions/orders/equity for active games
+    let unsubPositions: (() => void) | null = null;
+    let unsubEquity: (() => void) | null = null;
+    let ordersChannel: any = null;
+    let pollInterval: NodeJS.Timeout | null = null;
 
-    const unsubEquity = subscribeToEquityHistory(gameId, (payload) => {
-      console.log('Equity history updated:', payload);
-      loadEquityHistory(gameId, userId);
-      if (opponentId) {
-        loadEquityHistory(gameId, opponentId, true);
-      }
-    });
+    if (gameStatus === 'active') {
+      unsubPositions = subscribeToPositions(gameId, userId, (payload) => {
+        console.log('Positions updated:', payload);
+        loadPositions(gameId, userId);
+      });
 
-    // Subscribe to orders changes
-    const ordersChannel = supabase
-      .channel(`orders:${gameId}:${userId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'orders',
-          filter: `game_id=eq.${gameId} AND player_id=eq.${userId}`,
-        },
-        () => {
-          loadOrders(gameId, userId);
-          loadAllOrders(gameId, userId);
+      unsubEquity = subscribeToEquityHistory(gameId, (payload) => {
+        console.log('Equity history updated:', payload);
+        loadEquityHistory(gameId, userId);
+        if (opponentId) {
+          loadEquityHistory(gameId, opponentId, true);
         }
-      )
-      .subscribe();
+      });
 
-    // Add polling fallback to ensure UI stays updated (every 3 seconds)
-    const pollInterval = setInterval(() => {
-      loadGameData(gameId, userId);
-      loadPositions(gameId, userId);
-      loadOrders(gameId, userId);
-      loadAllOrders(gameId, userId);
-      loadLatestPrices();
-    }, 3000);
+      // Subscribe to orders changes
+      ordersChannel = supabase
+        .channel(`orders:${gameId}:${userId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'orders',
+            filter: `game_id=eq.${gameId} AND player_id=eq.${userId}`,
+          },
+          () => {
+            loadOrders(gameId, userId);
+            loadAllOrders(gameId, userId);
+          }
+        )
+        .subscribe();
+
+      // Add polling fallback to ensure UI stays updated (every 3 seconds)
+      pollInterval = setInterval(() => {
+        loadGameData(gameId, userId);
+        loadPositions(gameId, userId);
+        loadOrders(gameId, userId);
+        loadAllOrders(gameId, userId);
+        loadLatestPrices();
+      }, 3000);
+    }
 
     return () => {
       unsubPlayers();
-      unsubPositions();
-      unsubEquity();
-      supabase.removeChannel(ordersChannel);
-      clearInterval(pollInterval);
+      if (unsubPositions) unsubPositions();
+      if (unsubEquity) unsubEquity();
+      if (ordersChannel) supabase.removeChannel(ordersChannel);
+      if (pollInterval) clearInterval(pollInterval);
     };
   }, [gameId, userId, opponentId, gameStatus]);
 
@@ -322,9 +350,24 @@ function GamePageContent() {
       setGameStatus(game.status);
       setCurrentGame(game);
       setGamePlayers(players || []);
+      setWinnerId(game.winner_id || null);
+      
+      // Update balance/equity from players (for both active and completed games)
+      if (players) {
+        const me = players.find((p: any) => p.user_id === uId);
+        const opponent = players.find((p: any) => p.user_id !== uId);
+        if (me) {
+          setMyBalance(Number(me.balance || 0));
+          setMyEquity(Number(me.equity || me.balance || 0));
+        }
+        if (opponent) {
+          setOpponentEquity(Number(opponent.equity || opponent.balance || 0));
+          setOpponentId(opponent.user_id);
+        }
+      }
     }
     
-    // Only load game data if game is active
+    // Only load additional game data if game is active
     if (game?.status !== 'active') {
       return;
     }
@@ -343,16 +386,6 @@ function GamePageContent() {
       setGameEndTime(endTime);
     } else {
       console.log('Missing game timer data:', { game, started_at: game?.started_at, duration_minutes: game?.duration_minutes });
-    }
-    
-    if (players) {
-      const me = players.find((p: any) => p.user_id === uId);
-      const opponent = players.find((p: any) => p.user_id !== uId);
-      if (me) setMyBalance(me.equity);
-      if (opponent) {
-        setOpponentBalance(opponent.equity);
-        setOpponentId(opponent.user_id);
-      }
     }
     loadPositions(gId, uId);
     loadOrders(gId, uId);
@@ -429,7 +462,7 @@ function GamePageContent() {
       return;
     }
 
-    setLoading(true);
+    setPlacingOrder(true);
 
     try {
       // Place main order (MARKET or LIMIT)
@@ -445,27 +478,27 @@ function GamePageContent() {
 
       if (!result.order) {
         toast.error('Failed to place order: ' + result.error);
-        setLoading(false);
+        setPlacingOrder(false);
         return;
       }
 
       // Reset form
       setAmount('');
       setLimitPrice('');
-      toast.success('Order placed! Click "Process Orders" to execute it.');
+      toast.success('Order placed!');
     } catch (error: any) {
       toast.error('Error placing order: ' + error.message);
     }
 
-    setLoading(false);
+    setPlacingOrder(false);
   }
 
   async function handleCancelOrder(orderId: string) {
     if (!userId) return;
 
-    setLoading(true);
+    setUpdatingTpSl(true);
     const result = await orderAPI.cancelOrder(orderId, userId);
-    setLoading(false);
+    setUpdatingTpSl(false);
 
     if (result.order) {
       loadOrders(gameId!, userId);
@@ -514,7 +547,7 @@ function GamePageContent() {
       return;
     }
 
-    setLoading(true);
+    setUpdatingTpSl(true);
     try {
       const result = await orderAPI.placeOrder({
         gameId,
@@ -544,15 +577,15 @@ function GamePageContent() {
     } catch (error: any) {
       toast.error('Error creating order: ' + error.message);
     }
-    setLoading(false);
+    setUpdatingTpSl(false);
   }
 
   async function handleDeleteTpSl(orderId: string) {
     if (!userId) return;
 
-    setLoading(true);
+    setUpdatingTpSl(true);
     const result = await orderAPI.cancelOrder(orderId, userId);
-    setLoading(false);
+    setUpdatingTpSl(false);
 
     if (result.order && selectedPositionForTpSl) {
       await loadTpSlOrdersForPosition(selectedPositionForTpSl);
@@ -580,14 +613,14 @@ function GamePageContent() {
       return;
     }
 
-    setLoading(true);
+    setUpdatingTpSl(true);
     const updates = {
       triggerPrice: parseFloat(editTriggerPrice),
       quantity: editQuantity ? parseFloat(editQuantity) : undefined,
     };
 
     const result = await orderAPI.updateOrder(editingOrderId, userId, updates);
-    setLoading(false);
+    setUpdatingTpSl(false);
 
     if (result.order) {
       if (selectedPositionForTpSl) {
@@ -641,7 +674,7 @@ function GamePageContent() {
       return;
     }
 
-    setLoading(true);
+    setClosingPosition(true);
 
     try {
       const result = await orderAPI.placeOrder({
@@ -655,7 +688,7 @@ function GamePageContent() {
       });
 
       if (result.order) {
-        toast.success('Close order placed! Click "Process Orders" to execute it.');
+        toast.success('Close order placed!');
         handleCloseModal();
       } else {
         toast.error('Failed to place close order: ' + result.error);
@@ -664,23 +697,344 @@ function GamePageContent() {
       toast.error('Error placing close order: ' + error.message);
     }
 
-    setLoading(false);
+    setClosingPosition(false);
   }
 
-  async function handleProcessOrders() {
-    setLoading(true);
-    try {
-      const response = await fetch('http://localhost:8787/trigger');
-      const result = await response.json();
-      if (result.success) {
-        toast.success('Orders processed! Check your positions.');
-      } else {
-        toast.error('Failed to process orders');
-      }
-    } catch (error) {
-      toast.error('Error processing orders: ' + error);
+  // Show loading screen while waiting for winner to be determined
+  if (gameStatus === 'completed' && currentGame && gamePlayers.length === 2 && !currentGame.winner_id && !winnerId) {
+    return (
+      <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
+        <div className="bg-[#13141a] border border-[#1e1f25] rounded-lg p-8 max-w-md w-full text-center">
+          <div className="mb-4">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-600/20 mb-4">
+              <svg className="w-8 h-8 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            </div>
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-2">Game Completed</h2>
+          <p className="text-gray-400">Determining winner and finalizing results...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show end game screen only when winner_id is set
+  if (gameStatus === 'completed' && currentGame && gamePlayers.length === 2) {
+    const actualWinnerId = winnerId || currentGame.winner_id;
+    
+    // Don't show results until winner_id is confirmed
+    if (!actualWinnerId) {
+      return (
+        <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
+          <div className="bg-[#13141a] border border-[#1e1f25] rounded-lg p-8 max-w-md w-full text-center">
+            <div className="mb-4">
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-600/20 mb-4">
+                <svg className="w-8 h-8 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              </div>
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-2">Game Completed</h2>
+            <p className="text-gray-400">Determining winner and finalizing results...</p>
+          </div>
+        </div>
+      );
     }
-    setLoading(false);
+    
+    const winner = gamePlayers.find((p: any) => p.user_id === actualWinnerId);
+    const loser = gamePlayers.find((p: any) => p.user_id !== actualWinnerId);
+    const isWinner = userId === actualWinnerId;
+    
+    if (!winner || !loser) {
+      return (
+        <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
+          <div className="bg-[#13141a] border border-[#1e1f25] rounded-lg p-8 max-w-md w-full text-center">
+            <p className="text-red-400">Error loading game results. Please refresh the page.</p>
+          </div>
+        </div>
+      );
+    }
+    
+    return (
+      <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
+        <div className="bg-[#13141a] border border-[#1e1f25] rounded-lg p-8 max-w-3xl w-full">
+          {/* Winner Announcement */}
+          <div className="text-center mb-8">
+            <div className={`inline-flex items-center justify-center w-20 h-20 rounded-full mb-4 ${
+              isWinner ? 'bg-green-600/20' : 'bg-red-600/20'
+            }`}>
+              {isWinner ? (
+                <svg className="w-10 h-10 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="w-10 h-10 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              )}
+            </div>
+            <h1 className="text-4xl font-bold text-white mb-2">
+              {isWinner ? 'Victory!' : 'Defeat'}
+            </h1>
+            <p className="text-xl text-gray-400">
+              {isWinner ? 'You won the trading battle!' : `${winner?.user_id === gamePlayers[0]?.user_id ? 'Player 1' : 'Player 2'} won the trading battle!`}
+            </p>
+          </div>
+
+          {/* Final Results */}
+          <div className="bg-[#0a0b0d] border border-[#1e1f25] rounded-lg p-6 mb-6">
+            <h2 className="text-sm font-bold text-white uppercase tracking-widest mb-4">Final Results</h2>
+            <div className="space-y-4">
+              {/* Winner */}
+              <div className="flex items-center justify-between p-4 bg-[#13141a] rounded-lg border border-green-600/30">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-yellow-400 rounded-full flex items-center justify-center">
+                    <span className="text-xl">👑</span>
+                  </div>
+                  <div>
+                    <div className="text-sm text-gray-400">Winner</div>
+                    <div className="text-white font-semibold">
+                      {winner?.user_id === userId ? 'You' : 'Opponent'}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm text-gray-400">Final Equity</div>
+                  <div className="text-2xl font-mono font-bold text-green-400">
+                    ${winner?.equity?.toFixed(2) || '0.00'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Loser */}
+              <div className="flex items-center justify-between p-4 bg-[#13141a] rounded-lg border border-[#1e1f25]">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-[#1e1f25] rounded-full flex items-center justify-center">
+                    <span className="text-gray-500">#2</span>
+                  </div>
+                  <div>
+                    <div className="text-sm text-gray-400">Runner-up</div>
+                    <div className="text-white font-semibold">
+                      {loser?.user_id === userId ? 'You' : 'Opponent'}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm text-gray-400">Final Equity</div>
+                  <div className="text-2xl font-mono font-bold text-gray-300">
+                    ${loser?.equity?.toFixed(2) || '0.00'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Profit/Loss Summary */}
+            <div className="mt-6 pt-6 border-t border-[#1e1f25]">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="text-center">
+                  <div className="text-sm text-gray-400 mb-1">Your P&L</div>
+                  <div className={`text-xl font-mono font-bold ${
+                    (userId === winner?.user_id ? winner?.equity : loser?.equity) >= 10000 
+                      ? 'text-green-400' 
+                      : 'text-red-400'
+                  }`}>
+                    {((userId === winner?.user_id ? winner?.equity : loser?.equity) >= 10000 ? '+' : '')}
+                    ${(((userId === winner?.user_id ? winner?.equity : loser?.equity) || 10000) - 10000).toFixed(2)}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-sm text-gray-400 mb-1">Difference</div>
+                  <div className="text-xl font-mono font-bold text-blue-400">
+                    ${Math.abs((winner?.equity || 0) - (loser?.equity || 0)).toFixed(2)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex gap-3">
+            <button
+              onClick={() => router.push('/home')}
+              className="flex-1 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+            >
+              Back to Home
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show waiting room if game status is 'waiting' or null (still loading)
+  if (gameStatus === 'waiting' || (gameStatus === null && gameId)) {
+    const isPlayer1 = currentGame && userId === currentGame.player1_id;
+    const isPlayer2 = currentGame && userId === currentGame.player2_id;
+    
+    return (
+      <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
+        <div className="bg-[#13141a] border border-[#1e1f25] rounded-lg p-8 max-w-2xl w-full">
+          <div className="text-center mb-6">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600/20 rounded-full mb-4">
+              <svg className="w-8 h-8 text-blue-400 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-2">Waiting Room</h2>
+            <p className="text-gray-400">
+              {gameStatus === null 
+                ? 'Loading game...' 
+                : gamePlayers.length === 2 
+                  ? isPlayer1
+                    ? 'Both players ready! Click "Start Game" to begin.'
+                    : 'Both players ready! Waiting for game creator to start...'
+                  : isPlayer1
+                    ? 'Waiting for opponent to join...'
+                    : 'Waiting for opponent to join...'}
+            </p>
+          </div>
+
+            <div className="space-y-4 mb-6">
+            <div className="bg-[#0a0b0d] border border-[#1e1f25] rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-medium text-gray-400">Game ID</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-mono text-white bg-[#1e1f25] px-3 py-1 rounded">{gameId}</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(gameId || '');
+                      toast.success('Game ID copied to clipboard!');
+                    }}
+                    className="px-2 py-1 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded text-xs transition-colors"
+                    title="Copy Game ID"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-medium text-gray-400">Status</span>
+                <span className="text-sm font-medium text-yellow-400 bg-yellow-900/20 px-3 py-1 rounded">Waiting</span>
+              </div>
+              {currentGame && currentGame.duration_minutes && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-400">Duration</span>
+                  <span className="text-sm font-medium text-white bg-[#1e1f25] px-3 py-1 rounded">
+                    {currentGame.duration_minutes} {currentGame.duration_minutes === 1 ? 'minute' : 'minutes'}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-[#0a0b0d] border border-[#1e1f25] rounded-lg p-4">
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider mb-3">Players</h3>
+              <div className="space-y-2">
+                        {gamePlayers.map((player: any, index: number) => {
+                  const isCurrentUser = player.user_id === userId;
+                  const isP1 = currentGame && player.user_id === currentGame.player1_id;
+                  return (
+                    <div 
+                      key={player.id || index}
+                      className={`flex items-center justify-between p-3 rounded ${
+                        isCurrentUser ? 'bg-blue-600/10 border border-blue-600/30' : 'bg-[#1e1f25]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${
+                          isCurrentUser ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
+                        }`}>
+                          {isP1 ? '1' : '2'}
+                        </div>
+                        <div>
+                          <div className="text-white font-medium">
+                            {isCurrentUser ? 'You' : (isP1 ? 'Player 1' : 'Player 2')}
+                          </div>
+                          <div className="text-xs text-gray-400 font-mono">
+                            {player.user_id.slice(0, 8)}...
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isP1 && (
+                          <span className="text-xs px-2 py-1 bg-purple-600/20 text-purple-400 rounded" title="Game Creator">Creator</span>
+                        )}
+                        {isCurrentUser && (
+                          <span className="text-xs px-2 py-1 bg-blue-600/20 text-blue-400 rounded">You</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {gamePlayers.length < 2 && (
+                  <div className="flex items-center justify-between p-3 rounded bg-[#1e1f25] opacity-50">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm bg-gray-700 text-gray-500">
+                        2
+                      </div>
+                      <div>
+                        <div className="text-gray-500 font-medium">Waiting for opponent...</div>
+                        <div className="text-xs text-gray-600">Share Game ID to invite</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => router.push('/home')}
+              className="flex-1 px-4 py-2 bg-[#1e1f25] hover:bg-[#25262d] text-white rounded font-medium transition-colors"
+            >
+              Back to Home
+            </button>
+            {gamePlayers.length === 2 && currentGame && isPlayer1 ? (
+              <button
+                onClick={async () => {
+                  if (!gameId || !userId) return;
+                  setStartingGame(true);
+                  try {
+                    const result = await gameAPI.startGame(gameId, userId);
+                    if (result.game) {
+                      toast.success('Game starting!');
+                      // Reload game data to transition to active game
+                      setTimeout(() => {
+                        loadGameData(gameId, userId);
+                      }, 500);
+                    } else {
+                      toast.error('Failed to start game: ' + result.error);
+                      setStartingGame(false);
+                    }
+                  } catch (error: any) {
+                    toast.error('Error starting game: ' + error.message);
+                    setStartingGame(false);
+                  }
+                }}
+                disabled={startingGame}
+                className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {startingGame ? 'Starting...' : 'Start Game'}
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  if (gameId && userId) {
+                    loadGameData(gameId, userId);
+                  }
+                }}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition-colors"
+              >
+                Refresh
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
   }
 
 
@@ -871,8 +1225,12 @@ function GamePageContent() {
               <span className="text-white font-mono font-semibold">${myBalance.toFixed(2)}</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-gray-500">Opponent:</span>
-              <span className="text-gray-300 font-mono">${opponentBalance.toFixed(2)}</span>
+              <span className="text-gray-500">Equity:</span>
+              <span className="text-white font-mono font-semibold">${myEquity.toFixed(2)}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500">Opponent Equity:</span>
+              <span className="text-gray-300 font-mono">${opponentEquity.toFixed(2)}</span>
             </div>
           </div>
         </div>
@@ -936,9 +1294,9 @@ function GamePageContent() {
                 onChange={(e) => setSelectedChartTicker(e.target.value as CompatibleTickers)}
                 className="bg-[#1e1f25] text-white px-3 py-1.5 rounded border border-[#25262d] hover:bg-[#25262d] focus:border-blue-500 focus:outline-none font-semibold text-sm transition-colors cursor-pointer"
               >
-                <option value="BTC">BTC-USD</option>
-                <option value="ETH">ETH-USD</option>
-                <option value="AAPL">AAPL-USD</option>
+                {COMPATIBLETICKERS.map((ticker) => (
+                  <option key={ticker} value={ticker}>{ticker}-USD</option>
+                ))}
               </select>
               <span className="text-gray-500 text-sm">${latestPrices[selectedChartTicker]?.toFixed(2) || '-.--'}</span>
             </div>
@@ -1048,7 +1406,7 @@ function GamePageContent() {
                               <button
                                 onClick={() => handleCancelOrder(order.id)}
                                 className="px-2 py-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 text-xs rounded transition-colors"
-                                disabled={loading}
+                                disabled={updatingTpSl}
                               >
                                 Cancel
                               </button>
@@ -1234,9 +1592,9 @@ function GamePageContent() {
                 onChange={(e) => setSymbol(e.target.value)}
                 className="w-full px-3 py-2 bg-[#0a0b0d] border border-[#1e1f25] text-white rounded text-sm focus:border-blue-500 focus:outline-none"
               >
-                <option>BTC</option>
-                <option>ETH</option>
-                <option>AAPL</option>
+                {COMPATIBLETICKERS.map((ticker) => (
+                  <option key={ticker} value={ticker}>{ticker}</option>
+                ))}
               </select>
             </div>
 
@@ -1292,20 +1650,11 @@ function GamePageContent() {
 
             {/* Submit Order Button */}
             <button 
-              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed mb-2"
+              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={handlePlaceOrder}
-              disabled={loading || !amount}
+              disabled={placingOrder || !amount}
             >
-              {loading ? 'Placing...' : 'Place Order'}
-            </button>
-            
-            {/* Process Orders Button */}
-            <button 
-              className="w-full py-2.5 bg-[#1e1f25] hover:bg-[#25262d] text-white rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={handleProcessOrders}
-              disabled={loading}
-            >
-              {loading ? 'Processing...' : 'Process Orders'}
+              {placingOrder ? 'Placing...' : 'Place Order'}
             </button>
           </div>
         </div>
@@ -1369,7 +1718,7 @@ function GamePageContent() {
                             <button
                               onClick={handleSaveTpSlEdit}
                               className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors"
-                              disabled={loading}
+                              disabled={updatingTpSl}
                             >
                               Save
                             </button>
@@ -1412,7 +1761,7 @@ function GamePageContent() {
                                 <button
                                   onClick={() => handleDeleteTpSl(order.id)}
                                   className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition-colors"
-                                  disabled={loading}
+                                  disabled={updatingTpSl}
                                 >
                                   Cancel
                                 </button>
@@ -1450,7 +1799,7 @@ function GamePageContent() {
                 <button
                   onClick={() => handleCreateTpSl('TAKE_PROFIT')}
                   className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition-colors disabled:opacity-50"
-                  disabled={loading || !newTpTriggerPrice}
+                  disabled={updatingTpSl || !newTpTriggerPrice}
                 >
                   Create Take Profit
                 </button>
@@ -1478,7 +1827,7 @@ function GamePageContent() {
                 <button
                   onClick={() => handleCreateTpSl('STOP_LOSS')}
                   className="w-full px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded transition-colors disabled:opacity-50"
-                  disabled={loading || !newSlTriggerPrice}
+                  disabled={updatingTpSl || !newSlTriggerPrice}
                 >
                   Create Stop Loss
                 </button>
@@ -1566,9 +1915,9 @@ function GamePageContent() {
                       <button
                         onClick={handleClosePositionSubmit}
                         className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded transition-colors disabled:opacity-50"
-                        disabled={loading || !closeQuantity || (closeOrderType === 'LIMIT' && !closeLimitPrice)}
+                        disabled={closingPosition || !closeQuantity || (closeOrderType === 'LIMIT' && !closeLimitPrice)}
                       >
-                        {loading ? 'Placing...' : 'Place Close Order'}
+                        {closingPosition ? 'Placing...' : 'Place Close Order'}
                       </button>
                       <button
                         onClick={handleCloseModal}
