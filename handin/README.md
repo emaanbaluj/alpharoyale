@@ -1,6 +1,6 @@
 # Alpha Royale - Trading Game
 
-Complete handin package for the Alpha Royale real-time multiplayer trading game.
+Alpha Royale real-time multiplayer trading game.
 
 ## Project Structure
 
