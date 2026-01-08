@@ -59,7 +59,10 @@ function GamePageContent() {
   const [myBalance, setMyBalance] = useState(10000);
   const [opponentBalance, setOpponentBalance] = useState(10000);
   const [positions, setPositions] = useState<Position[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [placingOrder, setPlacingOrder] = useState(false);
+  const [closingPosition, setClosingPosition] = useState(false);
+  const [updatingTpSl, setUpdatingTpSl] = useState(false);
+  const [startingGame, setStartingGame] = useState(false);
   const [selectedChartTicker, setSelectedChartTicker] = useState<CompatibleTickers>("BTC");
   const [marketData, setMarketData] = useState<Partial<Record<CompatibleTickers, TickerPriceData>>>({});
   const [myEquityChartData, setMyEquityChartData] = useState<ChartUnit[]>([]);
@@ -326,7 +329,7 @@ function GamePageContent() {
       setWinnerId(game.winner_id || null);
     }
     
-    // Only load game data if game is active
+    // Only load additional game data if game is active
     if (game?.status !== 'active') {
       return;
     }
@@ -431,7 +434,7 @@ function GamePageContent() {
       return;
     }
 
-    setLoading(true);
+    setPlacingOrder(true);
 
     try {
       // Place main order (MARKET or LIMIT)
@@ -447,7 +450,7 @@ function GamePageContent() {
 
       if (!result.order) {
         toast.error('Failed to place order: ' + result.error);
-        setLoading(false);
+        setPlacingOrder(false);
         return;
       }
 
@@ -459,15 +462,15 @@ function GamePageContent() {
       toast.error('Error placing order: ' + error.message);
     }
 
-    setLoading(false);
+    setPlacingOrder(false);
   }
 
   async function handleCancelOrder(orderId: string) {
     if (!userId) return;
 
-    setLoading(true);
+    setUpdatingTpSl(true);
     const result = await orderAPI.cancelOrder(orderId, userId);
-    setLoading(false);
+    setUpdatingTpSl(false);
 
     if (result.order) {
       loadOrders(gameId!, userId);
@@ -516,7 +519,7 @@ function GamePageContent() {
       return;
     }
 
-    setLoading(true);
+    setUpdatingTpSl(true);
     try {
       const result = await orderAPI.placeOrder({
         gameId,
@@ -546,15 +549,15 @@ function GamePageContent() {
     } catch (error: any) {
       toast.error('Error creating order: ' + error.message);
     }
-    setLoading(false);
+    setUpdatingTpSl(false);
   }
 
   async function handleDeleteTpSl(orderId: string) {
     if (!userId) return;
 
-    setLoading(true);
+    setUpdatingTpSl(true);
     const result = await orderAPI.cancelOrder(orderId, userId);
-    setLoading(false);
+    setUpdatingTpSl(false);
 
     if (result.order && selectedPositionForTpSl) {
       await loadTpSlOrdersForPosition(selectedPositionForTpSl);
@@ -582,14 +585,14 @@ function GamePageContent() {
       return;
     }
 
-    setLoading(true);
+    setUpdatingTpSl(true);
     const updates = {
       triggerPrice: parseFloat(editTriggerPrice),
       quantity: editQuantity ? parseFloat(editQuantity) : undefined,
     };
 
     const result = await orderAPI.updateOrder(editingOrderId, userId, updates);
-    setLoading(false);
+    setUpdatingTpSl(false);
 
     if (result.order) {
       if (selectedPositionForTpSl) {
@@ -643,7 +646,7 @@ function GamePageContent() {
       return;
     }
 
-    setLoading(true);
+    setClosingPosition(true);
 
     try {
       const result = await orderAPI.placeOrder({
@@ -666,23 +669,7 @@ function GamePageContent() {
       toast.error('Error placing close order: ' + error.message);
     }
 
-    setLoading(false);
-  }
-
-  async function handleProcessOrders() {
-    setLoading(true);
-    try {
-      const response = await fetch('http://localhost:8787/trigger');
-      const result = await response.json();
-      if (result.success) {
-        toast.success('Orders processed! Check your positions.');
-      } else {
-        toast.error('Failed to process orders');
-      }
-    } catch (error) {
-      toast.error('Error processing orders: ' + error);
-    }
-    setLoading(false);
+    setClosingPosition(false);
   }
 
   // Show end game screen if game is completed
@@ -929,7 +916,7 @@ function GamePageContent() {
               <button
                 onClick={async () => {
                   if (!gameId || !userId) return;
-                  setLoading(true);
+                  setStartingGame(true);
                   try {
                     const result = await gameAPI.startGame(gameId, userId);
                     if (result.game) {
@@ -940,17 +927,17 @@ function GamePageContent() {
                       }, 500);
                     } else {
                       toast.error('Failed to start game: ' + result.error);
-                      setLoading(false);
+                      setStartingGame(false);
                     }
                   } catch (error: any) {
                     toast.error('Error starting game: ' + error.message);
-                    setLoading(false);
+                    setStartingGame(false);
                   }
                 }}
-                disabled={loading}
+                disabled={startingGame}
                 className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? 'Starting...' : 'Start Game'}
+                {startingGame ? 'Starting...' : 'Start Game'}
               </button>
             ) : (
               <button
@@ -1166,7 +1153,7 @@ function GamePageContent() {
                               <button
                                 onClick={() => handleCancelOrder(order.id)}
                                 className="px-2 py-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 text-xs rounded transition-colors"
-                                disabled={loading}
+                                disabled={updatingTpSl}
                               >
                                 Cancel
                               </button>
@@ -1412,9 +1399,9 @@ function GamePageContent() {
             <button 
               className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={handlePlaceOrder}
-              disabled={loading || !amount}
+              disabled={placingOrder || !amount}
             >
-              {loading ? 'Placing...' : 'Place Order'}
+              {placingOrder ? 'Placing...' : 'Place Order'}
             </button>
           </div>
         </div>
@@ -1478,7 +1465,7 @@ function GamePageContent() {
                             <button
                               onClick={handleSaveTpSlEdit}
                               className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors"
-                              disabled={loading}
+                              disabled={updatingTpSl}
                             >
                               Save
                             </button>
@@ -1521,7 +1508,7 @@ function GamePageContent() {
                                 <button
                                   onClick={() => handleDeleteTpSl(order.id)}
                                   className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition-colors"
-                                  disabled={loading}
+                                  disabled={updatingTpSl}
                                 >
                                   Cancel
                                 </button>
@@ -1559,7 +1546,7 @@ function GamePageContent() {
                 <button
                   onClick={() => handleCreateTpSl('TAKE_PROFIT')}
                   className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition-colors disabled:opacity-50"
-                  disabled={loading || !newTpTriggerPrice}
+                  disabled={updatingTpSl || !newTpTriggerPrice}
                 >
                   Create Take Profit
                 </button>
@@ -1587,7 +1574,7 @@ function GamePageContent() {
                 <button
                   onClick={() => handleCreateTpSl('STOP_LOSS')}
                   className="w-full px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded transition-colors disabled:opacity-50"
-                  disabled={loading || !newSlTriggerPrice}
+                  disabled={updatingTpSl || !newSlTriggerPrice}
                 >
                   Create Stop Loss
                 </button>
@@ -1675,9 +1662,9 @@ function GamePageContent() {
                       <button
                         onClick={handleClosePositionSubmit}
                         className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded transition-colors disabled:opacity-50"
-                        disabled={loading || !closeQuantity || (closeOrderType === 'LIMIT' && !closeLimitPrice)}
+                        disabled={closingPosition || !closeQuantity || (closeOrderType === 'LIMIT' && !closeLimitPrice)}
                       >
-                        {loading ? 'Placing...' : 'Place Close Order'}
+                        {closingPosition ? 'Placing...' : 'Place Close Order'}
                       </button>
                       <button
                         onClick={handleCloseModal}
