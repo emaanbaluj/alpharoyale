@@ -457,7 +457,7 @@ function GamePageContent() {
       // Reset form
       setAmount('');
       setLimitPrice('');
-      toast.success('Order placed! Click "Process Orders" to execute it.');
+      toast.success('Order placed!');
     } catch (error: any) {
       toast.error('Error placing order: ' + error.message);
     }
@@ -660,7 +660,7 @@ function GamePageContent() {
       });
 
       if (result.order) {
-        toast.success('Close order placed! Click "Process Orders" to execute it.');
+        toast.success('Close order placed!');
         handleCloseModal();
       } else {
         toast.error('Failed to place close order: ' + result.error);
