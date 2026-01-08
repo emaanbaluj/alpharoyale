@@ -103,6 +103,7 @@ function GamePageContent() {
   const [gameStatus, setGameStatus] = useState<string | null>(null);
   const [gamePlayers, setGamePlayers] = useState<any[]>([]);
   const [currentGame, setCurrentGame] = useState<any>(null);
+  const [winnerId, setWinnerId] = useState<string | null>(null);
 
   // Timer state
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
@@ -322,6 +323,7 @@ function GamePageContent() {
       setGameStatus(game.status);
       setCurrentGame(game);
       setGamePlayers(players || []);
+      setWinnerId(game.winner_id || null);
     }
     
     // Only load game data if game is active
@@ -683,6 +685,122 @@ function GamePageContent() {
     setLoading(false);
   }
 
+  // Show end game screen if game is completed
+  if (gameStatus === 'completed' && currentGame && gamePlayers.length === 2) {
+    const winner = gamePlayers.find((p: any) => p.user_id === winnerId);
+    const loser = gamePlayers.find((p: any) => p.user_id !== winnerId);
+    const isWinner = userId === winnerId;
+    
+    return (
+      <div className="h-screen bg-[#0a0b0d] flex items-center justify-center">
+        <div className="bg-[#13141a] border border-[#1e1f25] rounded-lg p-8 max-w-3xl w-full">
+          {/* Winner Announcement */}
+          <div className="text-center mb-8">
+            <div className={`inline-flex items-center justify-center w-20 h-20 rounded-full mb-4 ${
+              isWinner ? 'bg-green-600/20' : 'bg-red-600/20'
+            }`}>
+              {isWinner ? (
+                <svg className="w-10 h-10 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="w-10 h-10 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              )}
+            </div>
+            <h1 className="text-4xl font-bold text-white mb-2">
+              {isWinner ? 'Victory!' : 'Defeat'}
+            </h1>
+            <p className="text-xl text-gray-400">
+              {isWinner ? 'You won the trading battle!' : `${winner?.user_id === gamePlayers[0]?.user_id ? 'Player 1' : 'Player 2'} won the trading battle!`}
+            </p>
+          </div>
+
+          {/* Final Results */}
+          <div className="bg-[#0a0b0d] border border-[#1e1f25] rounded-lg p-6 mb-6">
+            <h2 className="text-sm font-bold text-white uppercase tracking-widest mb-4">Final Results</h2>
+            <div className="space-y-4">
+              {/* Winner */}
+              <div className="flex items-center justify-between p-4 bg-[#13141a] rounded-lg border border-green-600/30">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-yellow-400 rounded-full flex items-center justify-center">
+                    <span className="text-xl">👑</span>
+                  </div>
+                  <div>
+                    <div className="text-sm text-gray-400">Winner</div>
+                    <div className="text-white font-semibold">
+                      {winner?.user_id === userId ? 'You' : 'Opponent'}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm text-gray-400">Final Equity</div>
+                  <div className="text-2xl font-mono font-bold text-green-400">
+                    ${winner?.equity?.toFixed(2) || '0.00'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Loser */}
+              <div className="flex items-center justify-between p-4 bg-[#13141a] rounded-lg border border-[#1e1f25]">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-[#1e1f25] rounded-full flex items-center justify-center">
+                    <span className="text-gray-500">#2</span>
+                  </div>
+                  <div>
+                    <div className="text-sm text-gray-400">Runner-up</div>
+                    <div className="text-white font-semibold">
+                      {loser?.user_id === userId ? 'You' : 'Opponent'}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm text-gray-400">Final Equity</div>
+                  <div className="text-2xl font-mono font-bold text-gray-300">
+                    ${loser?.equity?.toFixed(2) || '0.00'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Profit/Loss Summary */}
+            <div className="mt-6 pt-6 border-t border-[#1e1f25]">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="text-center">
+                  <div className="text-sm text-gray-400 mb-1">Your P&L</div>
+                  <div className={`text-xl font-mono font-bold ${
+                    (userId === winner?.user_id ? winner?.equity : loser?.equity) >= 10000 
+                      ? 'text-green-400' 
+                      : 'text-red-400'
+                  }`}>
+                    {((userId === winner?.user_id ? winner?.equity : loser?.equity) >= 10000 ? '+' : '')}
+                    ${(((userId === winner?.user_id ? winner?.equity : loser?.equity) || 10000) - 10000).toFixed(2)}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-sm text-gray-400 mb-1">Difference</div>
+                  <div className="text-xl font-mono font-bold text-blue-400">
+                    ${Math.abs((winner?.equity || 0) - (loser?.equity || 0)).toFixed(2)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex gap-3">
+            <button
+              onClick={() => router.push('/home')}
+              className="flex-1 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+            >
+              Back to Home
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Show waiting room if game status is 'waiting' or null (still loading)
   if (gameStatus === 'waiting' || (gameStatus === null && gameId)) {
@@ -936,9 +1054,9 @@ function GamePageContent() {
                 onChange={(e) => setSelectedChartTicker(e.target.value as CompatibleTickers)}
                 className="bg-[#1e1f25] text-white px-3 py-1.5 rounded border border-[#25262d] hover:bg-[#25262d] focus:border-blue-500 focus:outline-none font-semibold text-sm transition-colors cursor-pointer"
               >
-                <option value="BTC">BTC-USD</option>
-                <option value="ETH">ETH-USD</option>
-                <option value="AAPL">AAPL-USD</option>
+                {COMPATIBLETICKERS.map((ticker) => (
+                  <option key={ticker} value={ticker}>{ticker}-USD</option>
+                ))}
               </select>
               <span className="text-gray-500 text-sm">${latestPrices[selectedChartTicker]?.toFixed(2) || '-.--'}</span>
             </div>
@@ -1234,9 +1352,9 @@ function GamePageContent() {
                 onChange={(e) => setSymbol(e.target.value)}
                 className="w-full px-3 py-2 bg-[#0a0b0d] border border-[#1e1f25] text-white rounded text-sm focus:border-blue-500 focus:outline-none"
               >
-                <option>BTC</option>
-                <option>ETH</option>
-                <option>AAPL</option>
+                {COMPATIBLETICKERS.map((ticker) => (
+                  <option key={ticker} value={ticker}>{ticker}</option>
+                ))}
               </select>
             </div>
 
@@ -1292,20 +1410,11 @@ function GamePageContent() {
 
             {/* Submit Order Button */}
             <button 
-              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed mb-2"
+              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={handlePlaceOrder}
               disabled={loading || !amount}
             >
               {loading ? 'Placing...' : 'Place Order'}
-            </button>
-            
-            {/* Process Orders Button */}
-            <button 
-              className="w-full py-2.5 bg-[#1e1f25] hover:bg-[#25262d] text-white rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={handleProcessOrders}
-              disabled={loading}
-            >
-              {loading ? 'Processing...' : 'Process Orders'}
             </button>
           </div>
         </div>
